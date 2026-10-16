@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-16T13:59:51.586Z
+-- 43 modul, di-generate 2026-10-16T14:39:51.493Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -4730,6 +4730,9 @@ return function(ctx)
 		-- Prioritas 1: Sell & Bronto Config List terpadu (Bulk / per-pet setting)
 		local rule = findRule(petType)
 		if rule then
+			if rule.special == true then
+				return false -- Special pet (bintang aktif) mutlak disimpan (KEEP)
+			end
 			local targetKg = tonumber(rule.kg) or 0
 			if w >= targetKg then
 				return false -- Weight >= KG -> KEEP (pet aman, tetap disimpan, dan masuk ke proses Bronto)
@@ -5088,6 +5091,10 @@ return function(ctx)
 		-- 1) Prioritas 1: Sell & Bronto Config List terpadu
 		local rule = findRule(pt)
 		if rule then
+			if rule.special == true then
+				if CFG.brontoSkipSpecial then return "skip" end
+				return "bronto"
+			end
 			local targetKg = tonumber(rule.kg) or 0
 			if w >= targetKg then
 				if CFG.brontoSkipSpecial then return "skip" end
@@ -5124,15 +5131,21 @@ return function(ctx)
 		return "Normal"
 	end
 	-- dispWeight = berat tampil (base*1.1). Bronto = dispWeight*1.3 (+30%).
-	local function sendHatchAlert(petType, eggName, dispWeight)
-		local url = CFG.webhookUrl
+	local function sendHatchAlert(petType, eggName, dispWeight, isBrontoHatch)
+		local url = (CFG.hatchWebhookUrl and CFG.hatchWebhookUrl ~= "" and CFG.hatchWebhookUrl) or CFG.webhookUrl
 		if not url or url == "" or not ctx.sendWebhook then return end
-		local brontoW = dispWeight * 1.3
+		if isBrontoHatch == nil then isBrontoHatch = true end
+		local finalW = isBrontoHatch and (dispWeight * 1.3) or dispWeight
+		local weightStr = isBrontoHatch and (("`%.2f KG` ➜ `%.2f KG` (+30%%)"):format(dispWeight, finalW)) or (("`%.2f KG`"):format(dispWeight))
+		local rule = findRule(petType)
+		local isSpec = (rule and rule.special == true)
+		local alertTitle = isSpec and "✦ CeszParadise — ★ SPECIAL PET Alert" or "✦ CeszParadise — 🦕 BRONTO PET Alert"
+		local alertColor = isSpec and 16766720 or 5814783
 		local payload = {
 			content = "@everyone",
 			embeds = { {
-				title = "✦ CeszParadise — Hatch Alerts",
-				color = 5814783,
+				title = alertTitle,
+				color = alertColor,
 				fields = {
 					{
 						name = "**Profile :**",
@@ -5141,8 +5154,8 @@ return function(ctx)
 					},
 					{
 						name = "**Hatched :**",
-						value = ("> Pet Name: `%s`\n> Hatched From: `%s`\n> Weight: `%.2f KG` ➜ `%.2f KG`")
-							:format(petType, eggName, dispWeight, brontoW),
+						value = ("> Pet Name: `%s` %s\n> Hatched From: `%s`\n> Weight: %s")
+							:format(petType, isSpec and "⭐" or "", eggName, weightStr),
 						inline = false,
 					},
 				},
@@ -5474,6 +5487,7 @@ return function(ctx)
 	local function isBrontoSpecial(petType, w)
 		local rule = findRule(petType)
 		if rule then
+			if rule.special == true then return true end
 			local targetKg = tonumber(rule.kg) or 0
 			return (tonumber(w) or 0) >= targetKg
 		end
@@ -5842,7 +5856,13 @@ return function(ctx)
 						break
 					end
 					local pt, w = eggPending(e)
-					if pt then trackHatch(pt, w, isBrontoSpecial(pt, w)) end
+					if pt then
+						local isSpecial = isBrontoSpecial(pt, w)
+						trackHatch(pt, w, isSpecial)
+						if isSpecial then
+							task.spawn(function() sendHatchAlert(pt, CFG.hatchEggName or "Rare Egg", w, false) end)
+						end
+					end
 					pcall(function() EggRemote:FireServer("HatchPet", e) end)
 					ctx.state.hatchEggsHatched = (ctx.state.hatchEggsHatched or 0) + 1
 				end
@@ -12396,19 +12416,20 @@ return function(ctx)
 
 					-- Left: Pet Name + Sub Rule Text
 					local nameCol = mk("Frame", {
-						Size = UDim2.new(1, -165, 1, 0),
+						Size = UDim2.new(1, -198, 1, 0),
 						BackgroundTransparency = 1,
 					}, rowFrame)
 					local pNameLbl = mk("TextLabel", {
 						Size = UDim2.new(1, 0, 0, 17),
 						Position = UDim2.new(0, 0, 0, 0),
 						BackgroundTransparency = 1,
-						Text = petName,
+						Text = (rule.special and "<font color=\"#ffd700\">★ </font>" or "") .. petName,
 						Font = F.bold,
 						TextSize = 13,
 						TextColor3 = C.txt,
 						TextXAlignment = Enum.TextXAlignment.Left,
 						TextTruncate = Enum.TextTruncate.AtEnd,
+						RichText = true,
 					}, nameCol)
 
 					local subRuleLbl = mk("TextLabel", {
@@ -12425,9 +12446,44 @@ return function(ctx)
 						local curKg = tonumber(rule.kg) or 0.8
 						local curAction = tostring(rule.action or "KEEP"):upper()
 						local col = curAction == "KEEP" and "#6ef5b9" or "#ff4b78"
-						subRuleLbl.Text = string.format("<font color=\"#ebd0eb\">&lt; %.2f</font> <font color=\"%s\"><b>%s</b></font> <font color=\"#ebd0eb\">| &gt;= %.2f BRONTO + KEEP</font>", curKg, col, curAction, curKg)
+						if rule.special then
+							subRuleLbl.Text = string.format("<font color=\"#ffd700\"><b>★ SPECIAL</b></font> <font color=\"#ebd0eb\">| &lt; %.2f</font> <font color=\"%s\"><b>%s</b></font> <font color=\"#ebd0eb\">| &gt;= %.2f BRONTO+KEEP</font>", curKg, col, curAction, curKg)
+						else
+							subRuleLbl.Text = string.format("<font color=\"#ebd0eb\">&lt; %.2f</font> <font color=\"%s\"><b>%s</b></font> <font color=\"#ebd0eb\">| &gt;= %.2f BRONTO + KEEP</font>", curKg, col, curAction, curKg)
+						end
 					end
 					updateRuleText()
+
+					-- Star button (Special Pet toggle) [ ★ ] / [ ☆ ]
+					local starBtn = mk("TextButton", {
+						Size = UDim2.fromOffset(26, 24),
+						Position = UDim2.new(1, -192, 0.5, -12),
+						BackgroundColor3 = rule.special and Color3.fromRGB(60, 48, 15) or C.row,
+						Text = rule.special and "★" or "☆",
+						Font = F.bold,
+						TextSize = 14,
+						TextColor3 = rule.special and Color3.fromRGB(255, 215, 0) or C.sub,
+						AutoButtonColor = false,
+					}, rowFrame)
+					corner(starBtn, 5)
+					local starStroke = stroke(starBtn, rule.special and Color3.fromRGB(255, 215, 0) or C.strokeSub, 1, rule.special and 0.3 or 0.6)
+
+					local function updateStarUI()
+						local isSpec = (rule.special == true)
+						starBtn.Text = isSpec and "★" or "☆"
+						starBtn.TextColor3 = isSpec and Color3.fromRGB(255, 215, 0) or C.sub
+						starBtn.BackgroundColor3 = isSpec and Color3.fromRGB(60, 48, 15) or C.row
+						starStroke.Color = isSpec and Color3.fromRGB(255, 215, 0) or C.strokeSub
+						starStroke.Transparency = isSpec and 0.3 or 0.6
+						pNameLbl.Text = (isSpec and "<font color=\"#ffd700\">★ </font>" or "") .. petName
+					end
+
+					starBtn.MouseButton1Click:Connect(function()
+						rule.special = not (rule.special == true)
+						persist()
+						updateStarUI()
+						updateRuleText()
+					end)
 
 					-- KG input box [ 0.8 ]
 					local kgFrame = mk("Frame", {
@@ -12522,6 +12578,7 @@ return function(ctx)
 		local bulkPetSet = {}
 		local bulkKgVal = 0.8
 		local bulkActionVal = "sell"
+		local bulkSpecialVal = false
 
 		local updateBulkPetDd = makeMultiDropdown(sCfgAcc, "Select Pet Types (Bulk)", "Pilih beberapa jenis pet sekaligus",
 			reg.PET_OPTIONS, bulkPetSet, nil, 9)
@@ -12536,6 +12593,10 @@ return function(ctx)
 			function() return bulkActionVal end,
 			function(code) bulkActionVal = code end, 11)
 
+		makeToggle(sCfgAcc, "Special Pet (Bulk)", "Tandai pet terpilih sebagai Special Pet (★ Alert & Bronto count)",
+			function() return bulkSpecialVal end,
+			function(v) bulkSpecialVal = v end, 12)
+
 		makeButton(sCfgAcc, "APPLY BULK LIST", "Terapkan setting ke semua pet terpilih di atas",
 			function()
 				CFG.hatchSellList = CFG.hatchSellList or {}
@@ -12545,6 +12606,7 @@ return function(ctx)
 						CFG.hatchSellList[petName] = {
 							kg = tonumber(bulkKgVal) or 0.8,
 							action = tostring(bulkActionVal):upper(),
+							special = bulkSpecialVal == true,
 						}
 						countApplied = countApplied + 1
 					end
@@ -12552,22 +12614,23 @@ return function(ctx)
 				if countApplied > 0 then
 					persist()
 					rebuildSellTable()
-					if ctx.log then ctx.log(("✦ Bulk sell config diterapkan untuk %d jenis pet"):format(countApplied)) end
+					if ctx.log then ctx.log(("✦ Bulk config diterapkan untuk %d jenis pet"):format(countApplied)) end
 				end
-			end, 12)
+			end, 13)
 
 		makeButton(sCfgAcc, "CLEAR BULK SELECTION", "Kosongkan checklist pet terpilih",
 			function()
 				for k in pairs(bulkPetSet) do bulkPetSet[k] = nil end
+				bulkSpecialVal = false
 				if updateBulkPetDd then updateBulkPetDd() end
-			end, 13)
+			end, 14)
 
 		-- Manual Sell Now button
 		makeButton(sCfgAcc, "Sell Now (manual)", "Jalankan proses sell sekali sekarang",
-			function() task.spawn(function() pcall(ctx.hatchDoSell) end) end, 14)
+			function() task.spawn(function() pcall(ctx.hatchDoSell) end) end, 15)
 
 		makeToggle(sCfgAcc, "Don't Hatch Bronto Pets", "Skip pet yang memenuhi syarat Bronto (jangan di-hatch)",
-			function() return CFG.brontoSkipSpecial end, function(v) CFG.brontoSkipSpecial = v; persist() end, 15)
+			function() return CFG.brontoSkipSpecial end, function(v) CFG.brontoSkipSpecial = v; persist() end, 16)
 
 		-- Egg Configuration Accordion
 		local hEgg = makeAccordion(pCfg, "Egg Configuration", 2, false)

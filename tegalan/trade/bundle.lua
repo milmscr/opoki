@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 14 modul, di-generate 2026-10-16T12:59:59.598Z
+-- 14 modul, di-generate 2026-10-16T13:59:51.597Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — inisialisasi akhir: default page, supervisor auto-claim, auto-resume. ]]
@@ -4015,7 +4015,7 @@ return function(ctx)
 
 		local bar = mk("Frame", {
 			Size = UDim2.new(0, 3, 1, -8),
-			Position = UDim2.new(0, -6, 0, 4),
+			Position = UDim2.new(0, -10, 0, 4),
 			BackgroundColor3 = C.acc,
 			BorderSizePixel = 0,
 			Visible = false,
@@ -4042,23 +4042,24 @@ return function(ctx)
 			Text = name,
 			Font = F.bold,
 			TextSize = 13,
-			TextColor3 = C.txt,
+			TextColor3 = C.sub,
 			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			ZIndex = 4,
 		}, btn)
 
 		local function setActive(isActive)
 			if isActive then
 				TS:Create(btn, TweenInfo.new(0.15), {
-					BackgroundColor3 = C.acc,
-					BackgroundTransparency = 0.15,
+					BackgroundColor3 = C.rowAlt,
+					BackgroundTransparency = 0,
 				}):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
-				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
 				bar.Visible = true
-				bar.Position = UDim2.new(0, -6, 0, 4)
+				bar.Position = UDim2.new(0, -10, 0, 4)
 				TS:Create(bar, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-					Position = UDim2.new(0, 0, 0, 4),
+					Position = UDim2.new(0, -6, 0, 4),
 				}):Play()
 			else
 				TS:Create(btn, TweenInfo.new(0.15), {
@@ -4066,9 +4067,9 @@ return function(ctx)
 					BackgroundTransparency = 0,
 				}):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
-				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
 				bar.Visible = false
-				bar.Position = UDim2.new(0, -6, 0, 4)
+				bar.Position = UDim2.new(0, -10, 0, 4)
 			end
 		end
 
@@ -4076,12 +4077,14 @@ return function(ctx)
 			if not bar.Visible then
 				TS:Create(btn, TweenInfo.new(0.15), { BackgroundColor3 = C.rowHover }):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
 			end
 		end)
 		btn.MouseLeave:Connect(function()
 			if not bar.Visible then
 				TS:Create(btn, TweenInfo.new(0.15), { BackgroundColor3 = C.row }):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
 			end
 		end)
 

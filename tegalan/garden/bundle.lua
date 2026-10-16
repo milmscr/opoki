@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-16T12:59:59.551Z
+-- 43 modul, di-generate 2026-10-16T13:59:51.586Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -4701,6 +4701,22 @@ return function(ctx)
 
 	-- filter disimpan pakai label "Pet - Egg"; cocokin pakai label yg sama.
 	local petEggLabel = (ctx.reg and ctx.reg.petEggLabel) or function(p) return p end
+	-- Helper pencocokan pet ke Sell & Bronto Config list
+	local function findRule(petType)
+		if not CFG.hatchSellList or not next(CFG.hatchSellList) then return nil end
+		local key = petEggLabel(petType)
+		local ptLower = tostring(petType or ""):lower()
+		local keyLower = tostring(key or ""):lower()
+		for name, r in pairs(CFG.hatchSellList) do
+			local nLower = tostring(name):lower()
+			if name == petType or key == name or ptLower == nLower or keyLower == nLower
+				or keyLower:find(nLower, 1, true) or ptLower:find(nLower, 1, true) then
+				return r
+			end
+		end
+		return nil
+	end
+
 	-- apakah pet ini termasuk yg DIJUAL (cocok filter)?
 	-- PENTING: pakai berat TAMPIL (BaseWeight*(1+0.1*Level)) = yg keliatan di game/dropdown,
 	-- BUKAN BaseWeight mentah (beda angka -> salah keep/favorite). Weight & Age = AND
@@ -4711,27 +4727,19 @@ return function(ctx)
 		local w = (pd.BaseWeight or 0) * (1 + 0.1 * age)
 		local key = petEggLabel(petType)
 
-		-- Prioritas 1: Config List baru (Bulk / per-pet setting seperti di NODE HUB)
-		if CFG.hatchSellList and next(CFG.hatchSellList) then
-			local rule = nil
-			for name, r in pairs(CFG.hatchSellList) do
-				if name == petType or key == name or tostring(petType):lower() == tostring(name):lower() then
-					rule = r
-					break
-				end
-			end
-			if rule then
-				local targetKg = tonumber(rule.kg) or 0
-				if w >= targetKg then
-					return false -- Weight >= KG -> KEEP (pet aman, tetap disimpan, dan masuk ke proses Bronto)
-				else
-					-- Weight < KG -> mengikuti pengaturan tombol KEEP / SELL
-					return rule.action == "SELL"
-				end
+		-- Prioritas 1: Sell & Bronto Config List terpadu (Bulk / per-pet setting)
+		local rule = findRule(petType)
+		if rule then
+			local targetKg = tonumber(rule.kg) or 0
+			if w >= targetKg then
+				return false -- Weight >= KG -> KEEP (pet aman, tetap disimpan, dan masuk ke proses Bronto)
 			else
-				-- Pet tidak ada di list config -> KEEP (aman)
-				return false
+				-- Weight < KG -> mengikuti pengaturan tombol KEEP / SELL
+				return rule.action == "SELL"
 			end
+		elseif CFG.hatchSellList and next(CFG.hatchSellList) then
+			-- Pet tidak ada di list config -> KEEP (aman)
+			return false
 		end
 
 		-- Fallback: config lama (Pets to Sell & Special Pets to Sell)
@@ -5073,13 +5081,30 @@ return function(ctx)
 	-- Klasifikasi egg buat bronto: "skip" | "bronto" | "normal"
 	local function classifyEgg(egg)
 		local pt, w = eggPending(egg)
-		local isSpecial = pt ~= nil and (CFG.brontoSpecialPets or {})[petEggLabel(pt)] == true
+		if not pt then return "normal" end
+
+		local key = petEggLabel(pt)
+
+		-- 1) Prioritas 1: Sell & Bronto Config List terpadu
+		local rule = findRule(pt)
+		if rule then
+			local targetKg = tonumber(rule.kg) or 0
+			if w >= targetKg then
+				if CFG.brontoSkipSpecial then return "skip" end
+				return "bronto"
+			else
+				return "normal"
+			end
+		end
+
+		-- 2) Fallback filter lama jika ada
+		local isSpecial = (CFG.brontoSpecialPets or {})[key] == true
 		if isSpecial and (CFG.brontoSpecialWeight or 0) > 0 and w <= CFG.brontoSpecialWeight then isSpecial = false end
 		if isSpecial and CFG.brontoSkipSpecial then return "skip" end
 		local isUni = false
 		if (CFG.brontoUniversalWeight or 0) > 0 and w > CFG.brontoUniversalWeight then
 			local types = CFG.brontoUniversalTypes or {}
-			if not next(types) or (pt and types[petEggLabel(pt)]) then isUni = true end
+			if not next(types) or types[key] then isUni = true end
 		end
 		if isSpecial or isUni then return "bronto" end
 		return "normal"
@@ -5445,8 +5470,13 @@ return function(ctx)
 	ctx.hatchTeamNames = teamNames
 
 	-- Kategori Hunt: Special (dari filter Bronto Config) + Heavy (>= 5kg, gabungan Huge s/d Colossal).
-	-- Apakah pet masuk filter Special di Bronto Configuration?
+	-- Apakah pet masuk filter Special di Sell & Bronto Configuration?
 	local function isBrontoSpecial(petType, w)
+		local rule = findRule(petType)
+		if rule then
+			local targetKg = tonumber(rule.kg) or 0
+			return (tonumber(w) or 0) >= targetKg
+		end
 		local key = petEggLabel(petType)
 		if (CFG.brontoSpecialPets or {})[key] ~= true then return false end
 		if (CFG.brontoSpecialWeight or 0) > 0 and (w or 0) <= CFG.brontoSpecialWeight then return false end
@@ -11639,9 +11669,9 @@ return function(ctx)
 	local TABS = {
 		{ "Pet", "Pet", "🐾" },
 		{ "Farm", "Farm", "🌾" },
+		{ "Hatch", "Hatch", "🥚" },
 		{ "Elephant", "Elephant", "🐘" },
 		{ "Flow", "Flow", "🌱" },
-		{ "Hatch", "Hatch", "🥚" },
 		{ "Leveling", "Leveling", "⚡" },
 		{ "Mutation", "Mutation", "🧪" },
 		{ "Inventory", "Inventory", "🎒" },
@@ -12030,11 +12060,11 @@ return function(ctx)
 			function() return ctx.inventoryPetOptions(CFG.hatchSellTeam) end, CFG.hatchSellTeam,
 			function() persist(); updateHatchInfoLine() end, 1)
 
-		-- 5) CONFIG SUB-TAB (Sell Table exact as Node Hub + Bulk + Egg Config + Bronto Config)
+		-- 5) CONFIG SUB-TAB (Sell & Bronto Table exact as Node Hub + Bulk + Egg Config)
 		local pCfg = sub.pages["config"]
 
-		-- Sell Table Accordion
-		local sCfgAcc = makeAccordion(pCfg, "Sell Configuration", 1, true)
+		-- Sell & Bronto Table Accordion
+		local sCfgAcc = makeAccordion(pCfg, "Sell & Bronto Configuration", 1, true)
 
 		-- Info Card
 		local infoCard = mk("Frame", {
@@ -12050,7 +12080,7 @@ return function(ctx)
 			Size = UDim2.new(1, 0, 0, 0),
 			AutomaticSize = Enum.AutomaticSize.Y,
 			BackgroundTransparency = 1,
-			Text = "- Weight < KG -> mengikuti pengaturan tombol KEEP / SELL.\n- Weight >= KG -> KEEP (pet aman, tetap disimpan, dan masuk ke proses Bronto).",
+			Text = "- Weight < KG -> mengikuti pengaturan tombol KEEP / SELL.\n- Weight >= KG -> KEEP + BRONTO (otomatis di-hatch pakai Bronto team + disimpan aman).",
 			Font = F.reg,
 			TextSize = 11,
 			TextColor3 = C.txt,
@@ -12395,7 +12425,7 @@ return function(ctx)
 						local curKg = tonumber(rule.kg) or 0.8
 						local curAction = tostring(rule.action or "KEEP"):upper()
 						local col = curAction == "KEEP" and "#6ef5b9" or "#ff4b78"
-						subRuleLbl.Text = string.format("<font color=\"#ebd0eb\">&lt; %.2f</font> <font color=\"%s\"><b>%s</b></font> <font color=\"#ebd0eb\">| &gt;= %.2f BRONTO+KEEP</font>", curKg, col, curAction, curKg)
+						subRuleLbl.Text = string.format("<font color=\"#ebd0eb\">&lt; %.2f</font> <font color=\"%s\"><b>%s</b></font> <font color=\"#ebd0eb\">| &gt;= %.2f BRONTO + KEEP</font>", curKg, col, curAction, curKg)
 					end
 					updateRuleText()
 
@@ -12536,6 +12566,9 @@ return function(ctx)
 		makeButton(sCfgAcc, "Sell Now (manual)", "Jalankan proses sell sekali sekarang",
 			function() task.spawn(function() pcall(ctx.hatchDoSell) end) end, 14)
 
+		makeToggle(sCfgAcc, "Don't Hatch Bronto Pets", "Skip pet yang memenuhi syarat Bronto (jangan di-hatch)",
+			function() return CFG.brontoSkipSpecial end, function(v) CFG.brontoSkipSpecial = v; persist() end, 15)
+
 		-- Egg Configuration Accordion
 		local hEgg = makeAccordion(pCfg, "Egg Configuration", 2, false)
 		makeSingleDropdown(hEgg, "Egg to Hatch", "Egg dari backpack yg di-place & di-hatch (+ jumlah)",
@@ -12574,19 +12607,6 @@ return function(ctx)
 		makeInput(hEgg, "Egg Plus Threshold", "Batas jumlah penambahan untuk trigger rejoin (misal: 20)",
 			function() return tostring(CFG.hatchRejoinPlusThreshold or 20) end,
 			function(t) CFG.hatchRejoinPlusThreshold = tonumber(t) or 20; persist() end, 7)
-
-		-- Bronto Configuration Accordion
-		local hBr = makeAccordion(pCfg, "Bronto Configuration", 3, false)
-		makeMultiDropdown(hBr, "Special Pets", "Pet yg WAJIB di-hatch pakai Bronto team",
-			reg.PET_EGG_ONLY, CFG.brontoSpecialPets, function() persist() end, 1)
-		makeInput(hBr, "Special Pets Weight Filter", "Special cuma kalau weight > ini (0 = ga difilter)",
-			function() return tostring(CFG.brontoSpecialWeight) end, function(t) CFG.brontoSpecialWeight = tonumber(t) or 0; persist() end, 2)
-		makeMultiDropdown(hBr, "Universal Weight Pet Types", "Tipe pet buat aturan universal (kosong = semua). Tampil dgn tipe egg-nya.",
-			reg.PET_EGG_ONLY, CFG.brontoUniversalTypes, function() persist() end, 3)
-		makeInput(hBr, "Universal Weight Threshold", "Pakai Bronto team kalau weight > ini (0 = off)",
-			function() return tostring(CFG.brontoUniversalWeight) end, function(t) CFG.brontoUniversalWeight = tonumber(t) or 0; persist() end, 4)
-		makeToggle(hBr, "Don't Hatch Special Pets", "Skip special pet sama sekali (jangan di-hatch)",
-			function() return CFG.brontoSkipSpecial end, function(v) CFG.brontoSkipSpecial = v; persist() end, 5)
 
 		-- START / STOP BAR (PATEN DI BAWAH HATCH PAGE)
 		makeStartStopBar(sub.bottomBarFrame or hatchPage,
@@ -14459,15 +14479,16 @@ return function(ctx)
 
 	----------------------------------------------------------------- Sidebar Tab System (makePage)
 	local TAB_SECTIONS = {
-		Pet      = "GENERAL",
-		Farm     = "GENERAL",
-		Elephant = "FARMING",
-		Flow     = "FARMING",
-		Leveling = "FARMING",
-		Mutation = "FARMING",
-		Shop     = "COMMERCE",
-		Hatch    = "COMMERCE",
-		Misc     = "MISC",
+		Pet       = "GENERAL",
+		Farm      = "GENERAL",
+		Inventory = "GENERAL",
+		Hatch     = "FARMING",
+		Elephant  = "FARMING",
+		Flow      = "FARMING",
+		Leveling  = "FARMING",
+		Mutation  = "FARMING",
+		Shop      = "COMMERCE",
+		Misc      = "MISC",
 	}
 	local SECTION_ORDERS = {
 		GENERAL  = 100,
@@ -14513,7 +14534,7 @@ return function(ctx)
 
 		local bar = mk("Frame", {
 			Size = UDim2.new(0, 3, 1, -8),
-			Position = UDim2.new(0, -6, 0, 4),
+			Position = UDim2.new(0, -10, 0, 4),
 			BackgroundColor3 = C.acc,
 			BorderSizePixel = 0,
 			Visible = false,
@@ -14540,23 +14561,24 @@ return function(ctx)
 			Text = name,
 			Font = F.bold,
 			TextSize = 13,
-			TextColor3 = C.txt,
+			TextColor3 = C.sub,
 			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			ZIndex = 4,
 		}, btn)
 
 		local function setActive(isActive)
 			if isActive then
 				TS:Create(btn, TweenInfo.new(0.15), {
-					BackgroundColor3 = C.acc,
-					BackgroundTransparency = 0.15,
+					BackgroundColor3 = C.rowAlt,
+					BackgroundTransparency = 0,
 				}):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
-				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
 				bar.Visible = true
-				bar.Position = UDim2.new(0, -6, 0, 4)
+				bar.Position = UDim2.new(0, -10, 0, 4)
 				TS:Create(bar, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-					Position = UDim2.new(0, 0, 0, 4),
+					Position = UDim2.new(0, -6, 0, 4),
 				}):Play()
 			else
 				TS:Create(btn, TweenInfo.new(0.15), {
@@ -14564,9 +14586,9 @@ return function(ctx)
 					BackgroundTransparency = 0,
 				}):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
-				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
 				bar.Visible = false
-				bar.Position = UDim2.new(0, -6, 0, 4)
+				bar.Position = UDim2.new(0, -10, 0, 4)
 			end
 		end
 
@@ -14574,12 +14596,14 @@ return function(ctx)
 			if not bar.Visible then
 				TS:Create(btn, TweenInfo.new(0.15), { BackgroundColor3 = C.rowHover }):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.acc }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.txt }):Play()
 			end
 		end)
 		btn.MouseLeave:Connect(function()
 			if not bar.Visible then
 				TS:Create(btn, TweenInfo.new(0.15), { BackgroundColor3 = C.row }):Play()
 				TS:Create(iconLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
+				TS:Create(nameLbl, TweenInfo.new(0.15), { TextColor3 = C.sub }):Play()
 			end
 		end)
 

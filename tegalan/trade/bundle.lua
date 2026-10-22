@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 14 modul, di-generate 2026-10-16T13:59:51.597Z
+-- 14 modul, di-generate 2026-10-22T00:01:32.044Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — inisialisasi akhir: default page, supervisor auto-claim, auto-resume. ]]
@@ -733,7 +733,13 @@ return function(ctx)
                         for j = 1, NUM_LISTINGS do
                             local sl = sp.listings[j] or sp.listings[tostring(j)]
                             if type(sl) == "table" then
-                                CFG.profiles[i].listings[j].pets    = (type(sl.pets) == "table") and sl.pets or {}
+                                local petsTable = (type(sl.pets) == "table") and sl.pets or {}
+                                local migratedPets = {}
+                                for petKey, val in pairs(petsTable) do
+                                    local newKey = (ctx.petEggLabel and ctx.petEggLabel(petKey)) or petKey
+                                    migratedPets[newKey] = val
+                                end
+                                CFG.profiles[i].listings[j].pets    = migratedPets
                                 CFG.profiles[i].listings[j].muts    = (type(sl.muts) == "table") and sl.muts or {}
                                 CFG.profiles[i].listings[j].minW    = tonumber(sl.minW) or 0
                                 CFG.profiles[i].listings[j].maxW    = tonumber(sl.maxW) or 0
@@ -778,25 +784,67 @@ return function(ctx)
 		return tostring(petType) .. " - " .. tostring(egg)
 	end
 
-	----------------------------------------------------------------- PET_OPTIONS
+	local function petBaseName(str)
+		if not str then return "" end
+		local base = tostring(str):match("^(.-)%s*-%s*")
+		return base or tostring(str)
+	end
+
+	----------------------------------------------------------------- PET_OPTIONS & petEggMap
+	local RAW_PET_OPTIONS = {}
 	local PET_OPTIONS = {}
+	local petEggMap = {}
 	do
+		local eggNames = {}
+		for eggName in pairs(PetEggs) do eggNames[#eggNames + 1] = eggName end
+		table.sort(eggNames)
+
 		local seen = {}
-		for eggName, egg in pairs(PetEggs) do
-			local items = egg.RarityData and egg.RarityData.Items
+		for _, eggName in ipairs(eggNames) do
+			local egg = PetEggs[eggName]
+			local items = egg and egg.RarityData and egg.RarityData.Items
 			if items then
+				local cnt = 0; for _ in pairs(items) do cnt = cnt + 1 end
+				local realEgg = eggName ~= "Fake Egg" and cnt <= 40
 				for petName in pairs(items) do
 					if not tostring(petName):match("^Egg/") then
-						local nameStr = tostring(petName)
+						local nameStr = tostring(petName):match("([^/]+)$") or tostring(petName)
 						if not seen[nameStr] then
 							seen[nameStr] = true
-							PET_OPTIONS[#PET_OPTIONS + 1] = nameStr
+							RAW_PET_OPTIONS[#RAW_PET_OPTIONS + 1] = nameStr
+						end
+						if realEgg and not petEggMap[nameStr] then
+							petEggMap[nameStr] = eggName
 						end
 					end
 				end
 			end
 		end
+
+		for petName in pairs(PetList) do
+			if not tostring(petName):match("^Egg/") then
+				local nameStr = tostring(petName):match("([^/]+)$") or tostring(petName)
+				if not seen[nameStr] then
+					seen[nameStr] = true
+					RAW_PET_OPTIONS[#RAW_PET_OPTIONS + 1] = nameStr
+				end
+			end
+		end
+
+		table.sort(RAW_PET_OPTIONS)
+
+		for _, pt in ipairs(RAW_PET_OPTIONS) do
+			local egg = petEggMap[pt]
+			PET_OPTIONS[#PET_OPTIONS + 1] = egg and (pt .. " - " .. egg) or pt
+		end
 		table.sort(PET_OPTIONS)
+	end
+
+	local function petEggLabel(pt)
+		if not pt then return "" end
+		local base = petBaseName(pt)
+		local egg = petEggMap[base] or petEggMap[pt]
+		return egg and (base .. " - " .. egg) or tostring(pt)
 	end
 
 	----------------------------------------------------------------- PET_COMBO_OPTIONS (Pet - Egg)
@@ -804,18 +852,52 @@ return function(ctx)
 	local PET_COMBO_OPTIONS = {}
 	do
 		local seen = {}
-		for eggName, egg in pairs(PetEggs) do
-			local items = egg.RarityData and egg.RarityData.Items
+		local eggNames = {}
+		for eggName in pairs(PetEggs) do eggNames[#eggNames + 1] = eggName end
+		table.sort(eggNames)
+
+		for _, eggName in ipairs(eggNames) do
+			local egg = PetEggs[eggName]
+			local items = egg and egg.RarityData and egg.RarityData.Items
 			if items then
-				for petName in pairs(items) do
-					if not tostring(petName):match("^Egg/") then
-						local k = comboKey(petName, eggName)
-						if not seen[k] then seen[k] = true; PET_COMBO_OPTIONS[#PET_COMBO_OPTIONS + 1] = k end
+				local cnt = 0; for _ in pairs(items) do cnt = cnt + 1 end
+				local realEgg = eggName ~= "Fake Egg" and cnt <= 40
+				if realEgg then
+					for petName in pairs(items) do
+						if not tostring(petName):match("^Egg/") then
+							local nameStr = tostring(petName):match("([^/]+)$") or tostring(petName)
+							local k = comboKey(nameStr, eggName)
+							if not seen[k] then seen[k] = true; PET_COMBO_OPTIONS[#PET_COMBO_OPTIONS + 1] = k end
+						end
 					end
 				end
 			end
 		end
 		table.sort(PET_COMBO_OPTIONS)
+	end
+
+	-- Helper pencocokan universal
+	local function petMatchesType(typeSet, petType, petData)
+		if not typeSet or not next(typeSet) or not petType then return false end
+		if typeSet[petType] then return true end
+
+		local base = petBaseName(petType)
+		if base ~= petType and typeSet[base] then return true end
+
+		local rawName = (base ~= "" and base ~= petType) and base or petType
+		local egg = (petData and petData.HatchedFrom) or petEggMap[rawName] or petEggMap[petType]
+		if egg then
+			local combo = rawName .. " - " .. egg
+			if typeSet[combo] then return true end
+		end
+
+		local ptLower = rawName:lower()
+		for k in pairs(typeSet) do
+			local kBaseLower = petBaseName(k):lower()
+			if kBaseLower == ptLower then return true end
+		end
+
+		return false
 	end
 
 	----------------------------------------------------------------- MUT_OPTIONS
@@ -845,13 +927,22 @@ return function(ctx)
 
 	ctx.reg = {
 		comboKey          = comboKey,
+		petBaseName       = petBaseName,
+		petEggLabel       = petEggLabel,
+		petEggMap         = petEggMap,
+		petMatchesType    = petMatchesType,
 		mutDisplay        = mutDisplay,
 		PET_OPTIONS       = PET_OPTIONS,
+		RAW_PET_OPTIONS   = RAW_PET_OPTIONS,
 		PET_COMBO_OPTIONS = PET_COMBO_OPTIONS,
 		PET_ICONS         = PET_ICONS,
 		MUT_OPTIONS       = MUT_OPTIONS,
 		SKIN_OPTIONS      = SKIN_OPTIONS,
 	}
+	ctx.petEggMap = petEggMap
+	ctx.petBaseName = petBaseName
+	ctx.petEggLabel = petEggLabel
+	ctx.petMatchesType = petMatchesType
 end
 ]=],
 	["modules/core/services.lua"] = [=[
@@ -1716,7 +1807,14 @@ return function(ctx)
 
 		-- Helper: cek pet cocok dengan listing config
 		local function petMatches(petType, pd, sub)
-			if not (sub.pets[petType] or sub.pets[comboKey(petType, pd.HatchedFrom or "?")]) then return false end
+			local egg = (pd and pd.HatchedFrom) or (ctx.reg and ctx.reg.petEggMap and ctx.reg.petEggMap[petType])
+			local matchPet = sub.pets[petType]
+				or (egg and sub.pets[comboKey(petType, egg)])
+				or (ctx.reg and ctx.reg.petEggLabel and sub.pets[ctx.reg.petEggLabel(petType)])
+			if not matchPet and ctx.petMatchesType then
+				matchPet = ctx.petMatchesType(sub.pets, petType, pd)
+			end
+			if not matchPet then return false end
 			local mut = mutDisplay(pd.MutationType)
 			local mutOK
 			if not next(sub.muts) then mutOK = (mut == "None") else mutOK = sub.muts[mut] == true end

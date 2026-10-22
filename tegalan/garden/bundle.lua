@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-16T14:39:51.493Z
+-- 43 modul, di-generate 2026-10-22T00:01:32.034Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -613,8 +613,20 @@ return function(ctx)
 	do
 		local st = loadState()
 		if st then
+			local function tbl(v) return (type(v) == "table") and v or {} end
+			local function migratePetSet(t)
+				if type(t) ~= "table" then return {} end
+				local out = {}
+				local petEggLabel = ctx.petEggLabel or (ctx.reg and ctx.reg.petEggLabel)
+				for k, v in pairs(t) do
+					local newK = petEggLabel and petEggLabel(k) or k
+					out[newK] = v
+				end
+				return out
+			end
+
 			CFG.targetPlayer   = st.targetPlayer or ""
-			CFG.petTypes       = (type(st.petTypes) == "table") and st.petTypes or {}
+			CFG.petTypes       = migratePetSet(st.petTypes)
 			CFG.weightFilter   = tonumber(st.weightFilter) or 0
 			CFG.ageFilter      = tonumber(st.ageFilter) or 0
 			CFG.petsPerTrade   = tonumber(st.petsPerTrade) or 12
@@ -624,7 +636,7 @@ return function(ctx)
 			CFG.tradeTicketEnabled = st.tradeTicketEnabled or st.tradeEnabled or false
 
 			CFG.giftTargetPlayer     = st.giftTargetPlayer or ""
-			CFG.giftPetTypes         = (type(st.giftPetTypes) == "table") and st.giftPetTypes or {}
+			CFG.giftPetTypes         = migratePetSet(st.giftPetTypes)
 			CFG.giftWeightFilter     = tonumber(st.giftWeightFilter) or 0
 			CFG.giftAgeFilter        = tonumber(st.giftAgeFilter) or 0
 			CFG.giftPetsPerBatch     = tonumber(st.giftPetsPerBatch) or 12
@@ -634,7 +646,6 @@ return function(ctx)
 			-- Auto Hatch + Auto Sell
 			CFG.hatchEnabled    = st.hatchEnabled or false
 			CFG.autoSellEnabled = st.autoSellEnabled or false
-			local function tbl(v) return (type(v) == "table") and v or {} end
 			CFG.hatchCoreTeam   = tbl(st.hatchCoreTeam)
 			CFG.hatchHatchTeam  = tbl(st.hatchHatchTeam)
 			CFG.hatchBrontoTeam = tbl(st.hatchBrontoTeam)
@@ -675,14 +686,14 @@ return function(ctx)
 			CFG.hatchTeamUnequipDelay = tonumber(st.hatchTeamUnequipDelay) or 1
 			CFG.hatchSellEquipDelay   = tonumber(st.hatchSellEquipDelay) or 0
 			CFG.hatchSellUnequipDelay = tonumber(st.hatchSellUnequipDelay) or 1
-			CFG.hatchSellList         = tbl(st.hatchSellList)
+			CFG.hatchSellList         = migratePetSet(st.hatchSellList)
 			CFG.autoUnfavoritePets    = st.autoUnfavoritePets or false
-			CFG.unfavoritePetTypes    = tbl(st.unfavoritePetTypes)
+			CFG.unfavoritePetTypes    = migratePetSet(st.unfavoritePetTypes)
 			CFG.tradeMethod           = st.tradeMethod or "ticket"
 			CFG.acceptGifts    = st.acceptGifts or false
 			CFG.acceptTrades   = st.acceptTrades or false
 			CFG.autoFavorite   = st.autoFavorite or false
-			CFG.favoritePetTypes = (type(st.favoritePetTypes) == "table") and st.favoritePetTypes or {}
+			CFG.favoritePetTypes = migratePetSet(st.favoritePetTypes)
 			CFG.pnpPetTypes = (type(st.pnpPetTypes) == "table") and st.pnpPetTypes or {}
 			CFG.pnpUuids    = (type(st.pnpUuids) == "table") and st.pnpUuids or {}
 			CFG.pickupDelay = tonumber(st.pickupDelay) or 0.3
@@ -710,13 +721,13 @@ return function(ctx)
 			CFG.premiumPay = st.premiumPay or "robux"
 			
 			CFG.levelingTeamUuids   = (type(st.levelingTeamUuids) == "table") and st.levelingTeamUuids or {}
-			CFG.levelingPetTypes    = (type(st.levelingPetTypes) == "table") and st.levelingPetTypes or {}
+			CFG.levelingPetTypes    = migratePetSet(st.levelingPetTypes)
 			CFG.levelingTargetLevel = tonumber(st.levelingTargetLevel) or 500
 			CFG.levelingMaxPets     = tonumber(st.levelingMaxPets) or 2
 			CFG.levelingEnabled     = st.levelingEnabled or false
 
 			-- Leveling V2
-			CFG.levelingV2PetTypes = (type(st.levelingV2PetTypes) == "table") and st.levelingV2PetTypes or {}
+			CFG.levelingV2PetTypes = migratePetSet(st.levelingV2PetTypes)
 			CFG.levelingV2P1Team   = (type(st.levelingV2P1Team) == "table") and st.levelingV2P1Team or {}
 			CFG.levelingV2P1Target = tonumber(st.levelingV2P1Target) or 40
 			CFG.levelingV2P1Max    = tonumber(st.levelingV2P1Max) or 3
@@ -727,10 +738,10 @@ return function(ctx)
 
 			-- Growth
 			CFG.growthEnabled  = st.growthEnabled or false
-			CFG.growthPetTypes = (type(st.growthPetTypes) == "table") and st.growthPetTypes or {}
-			CFG.growthPetTypesElephant = (type(st.growthPetTypesElephant) == "table") and st.growthPetTypesElephant or {}
-			CFG.growthPetTypesMutation = (type(st.growthPetTypesMutation) == "table") and st.growthPetTypesMutation or {}
-			CFG.growthPetTypesLeveling = (type(st.growthPetTypesLeveling) == "table") and st.growthPetTypesLeveling or {}
+			CFG.growthPetTypes = migratePetSet(st.growthPetTypes)
+			CFG.growthPetTypesElephant = migratePetSet(st.growthPetTypesElephant)
+			CFG.growthPetTypesMutation = migratePetSet(st.growthPetTypesMutation)
+			CFG.growthPetTypesLeveling = migratePetSet(st.growthPetTypesLeveling)
 			CFG.growthFlow     = (type(st.growthFlow) == "table") and st.growthFlow or { "elephant", "mutation", "leveling" }
 			CFG.growthElephantTeam   = (type(st.growthElephantTeam) == "table") and st.growthElephantTeam or {}
 			CFG.growthElephantWeight = tonumber(st.growthElephantWeight) or 5.5
@@ -749,7 +760,7 @@ return function(ctx)
 			CFG.mutationExpTeam       = (type(st.mutationExpTeam) == "table") and st.mutationExpTeam or {}
 			CFG.mutationBoostTeam     = (type(st.mutationBoostTeam) == "table") and st.mutationBoostTeam or {}
 			CFG.mutationPhoenixTeam   = (type(st.mutationPhoenixTeam) == "table") and st.mutationPhoenixTeam or {}
-			CFG.mutationTargetTypes   = (type(st.mutationTargetTypes) == "table") and st.mutationTargetTypes or {}
+			CFG.mutationTargetTypes   = migratePetSet(st.mutationTargetTypes)
 			CFG.mutationTargetMutations = (type(st.mutationTargetMutations) == "table") and st.mutationTargetMutations or {}
 			CFG.mutationTargetAge     = tonumber(st.mutationTargetAge) or 50
 			CFG.mutationDelayAutoClaim = tonumber(st.mutationDelayAutoClaim) or 0.5
@@ -826,7 +837,7 @@ return function(ctx)
 			CFG.reconnectInterval = tonumber(st.reconnectInterval) or 5
 
 			CFG.cleanseTeamUuids     = (type(st.cleanseTeamUuids) == "table") and st.cleanseTeamUuids or {}
-			CFG.cleansePetTypes      = (type(st.cleansePetTypes) == "table") and st.cleansePetTypes or {}
+			CFG.cleansePetTypes      = migratePetSet(st.cleansePetTypes)
 			CFG.cleanseKeepMutations = (type(st.cleanseKeepMutations) == "table") and st.cleanseKeepMutations or {}
 			CFG.cleanseMaxPets       = tonumber(st.cleanseMaxPets) or 2
 			CFG.cleanseEnabled       = st.cleanseEnabled or false
@@ -836,12 +847,12 @@ return function(ctx)
 			CFG.boostEnabled   = st.boostEnabled or false
 
 			CFG.elephantTeamUuids   = (type(st.elephantTeamUuids) == "table") and st.elephantTeamUuids or {}
-			CFG.elephantPetTypes    = (type(st.elephantPetTypes) == "table") and st.elephantPetTypes or {}
+			CFG.elephantPetTypes    = migratePetSet(st.elephantPetTypes)
 			CFG.elephantTargetWeight = tonumber(st.elephantTargetWeight) or 5.5
 			CFG.elephantMaxPets     = tonumber(st.elephantMaxPets) or 2
 			CFG.elephantEnabled     = st.elephantEnabled or false
 			CFG.elephantV2Team      = (type(st.elephantV2Team) == "table") and st.elephantV2Team or {}
-			CFG.elephantV2Types     = (type(st.elephantV2Types) == "table") and st.elephantV2Types or {}
+			CFG.elephantV2Types     = migratePetSet(st.elephantV2Types)
 			CFG.elephantV2Weight    = tonumber(st.elephantV2Weight) or 5.5
 			CFG.elephantV2MaxPets   = tonumber(st.elephantV2MaxPets) or 3
 			CFG.elephantV2Gajah     = (type(st.elephantV2Gajah) == "string") and st.elephantV2Gajah or ""
@@ -875,14 +886,19 @@ return function(ctx)
 	local PetEggs   = ctx.deps.PetEggs
 	local EnumToMut = ctx.deps.EnumToMut
 
-	-- Daftar pet type unik (nama saja, tanpa egg) untuk filter trade.
-	-- + peta pet->egg (buat label "Pet - Egg" di filter sell).
-	local PET_OPTIONS = {}
-	local petEggMap = {}   -- petType -> eggName (egg pertama yg punya pet ini)
+	-- Daftar pet type unik & pemetaan ke egg asal (format "Pet - Egg" apabila dari egg).
+	local RAW_PET_OPTIONS = {} -- nama pet polos (mis. "Raccoon")
+	local PET_OPTIONS = {}     -- opsi dropdown: "Pet - Egg" jika ada egg, atau "Pet" jika bukan dari egg
+	local petEggMap = {}       -- petType -> eggName (egg asli pertama yg punya pet ini)
 	do
+		local eggNames = {}
+		for eggName in pairs(PetEggs) do eggNames[#eggNames + 1] = eggName end
+		table.sort(eggNames)
+
 		local seen = {}
-		for eggName, egg in pairs(PetEggs) do
-			local items = egg.RarityData and egg.RarityData.Items
+		for _, eggName in ipairs(eggNames) do
+			local egg = PetEggs[eggName]
+			local items = egg and egg.RarityData and egg.RarityData.Items
 			if items then
 				-- skip egg catch-all/admin (mis. "Fake Egg" isi 431 pet) dari peta pet->egg
 				local cnt = 0; for _ in pairs(items) do cnt = cnt + 1 end
@@ -891,31 +907,88 @@ return function(ctx)
 					local s = tostring(petName):match("([^/]+)$") or tostring(petName)
 					if not tostring(petName):match("^Egg/") and not seen[s] then
 						seen[s] = true
-						PET_OPTIONS[#PET_OPTIONS + 1] = s
+						RAW_PET_OPTIONS[#RAW_PET_OPTIONS + 1] = s
 					end
 					if realEgg and not petEggMap[s] then petEggMap[s] = eggName end
 				end
 			end
 		end
+
+		-- Pet tambahan dari PetList jika ada
+		local okPL, PetList = pcall(function()
+			return require(game:GetService("ReplicatedStorage").Data.PetRegistry.PetList)
+		end)
+		if okPL and type(PetList) == "table" then
+			for petName in pairs(PetList) do
+				local s = tostring(petName):match("([^/]+)$") or tostring(petName)
+				if not tostring(petName):match("^Egg/") and not seen[s] then
+					seen[s] = true
+					RAW_PET_OPTIONS[#RAW_PET_OPTIONS + 1] = s
+				end
+			end
+		end
+
+		table.sort(RAW_PET_OPTIONS)
+
+		-- Bangun PET_OPTIONS: jika dari egg -> "Pet - Egg", jika bukan -> "Pet"
+		for _, pt in ipairs(RAW_PET_OPTIONS) do
+			local egg = petEggMap[pt]
+			PET_OPTIONS[#PET_OPTIONS + 1] = egg and (pt .. " - " .. egg) or pt
+		end
 		table.sort(PET_OPTIONS)
 	end
 
-	-- Opsi filter sell: "Pet - Egg". Label = value (dipakai sbg key filter).
-	local PET_EGG_OPTIONS = {}
-	for _, pt in ipairs(PET_OPTIONS) do
-		local egg = petEggMap[pt]
-		PET_EGG_OPTIONS[#PET_EGG_OPTIONS + 1] = egg and (pt .. " - " .. egg) or pt
+	local function petBaseName(str)
+		if not str then return "" end
+		local base = tostring(str):match("^(.-)%s*-%s*")
+		return base or tostring(str)
 	end
+
 	local function petEggLabel(pt)
-		local egg = petEggMap[pt]
-		return egg and (pt .. " - " .. egg) or pt
+		if not pt then return "" end
+		local base = petBaseName(pt)
+		local egg = petEggMap[base] or petEggMap[pt]
+		return egg and (base .. " - " .. egg) or tostring(pt)
 	end
+
+	-- Opsi filter sell / compatibility alias
+	local PET_EGG_OPTIONS = PET_OPTIONS
 
 	-- CUMA pet yang punya egg asli (format "Pet - Egg"). Buat filter yang wajib ada egg-nya
 	-- (Special Pets, Universal, Pet to Sell) — pet tanpa egg tidak ditampilkan.
 	local PET_EGG_ONLY = {}
-	for _, pt in ipairs(PET_OPTIONS) do
+	for _, pt in ipairs(RAW_PET_OPTIONS) do
 		if petEggMap[pt] then PET_EGG_ONLY[#PET_EGG_ONLY + 1] = pt .. " - " .. petEggMap[pt] end
+	end
+	table.sort(PET_EGG_ONLY)
+
+	-- Helper pencocokan universal: periksa apakah pet cocok dengan himpunan pilihan (typeSet).
+	-- Mendukung tipe key "Pet - Egg" maupun key nama polos ("Pet") untuk backward compatibility.
+	local function petMatchesType(typeSet, petType, petData)
+		if not typeSet or not next(typeSet) or not petType then return false end
+		-- 1. Direct match (mis. typeSet["Raccoon - Night Egg"] atau typeSet["Raccoon"])
+		if typeSet[petType] then return true end
+
+		-- 2. Base pet name jika petType berformat "Pet - Egg"
+		local base = petBaseName(petType)
+		if base ~= petType and typeSet[base] then return true end
+
+		-- 3. Cek kombinasi "Pet - Egg" dari data pet atau peta egg
+		local rawName = (base ~= "" and base ~= petType) and base or petType
+		local egg = (petData and petData.HatchedFrom) or petEggMap[rawName] or petEggMap[petType]
+		if egg then
+			local combo = rawName .. " - " .. egg
+			if typeSet[combo] then return true end
+		end
+
+		-- 4. Case-insensitive fallback
+		local ptLower = rawName:lower()
+		for k in pairs(typeSet) do
+			local kBaseLower = petBaseName(k):lower()
+			if kBaseLower == ptLower then return true end
+		end
+
+		return false
 	end
 
 	local MUT_OPTIONS, seenMut = { "None" }, { None = true }
@@ -967,13 +1040,21 @@ return function(ctx)
 
 	ctx.reg = {
 		PET_OPTIONS = PET_OPTIONS,
+		RAW_PET_OPTIONS = RAW_PET_OPTIONS,
 		PET_EGG_OPTIONS = PET_EGG_OPTIONS,
 		PET_EGG_ONLY = PET_EGG_ONLY,
+		petEggMap = petEggMap,
+		petBaseName = petBaseName,
 		petEggLabel = petEggLabel,
+		petMatchesType = petMatchesType,
 		MUT_OPTIONS = MUT_OPTIONS,
 		MACHINE_MUT_OPTIONS = MACHINE_MUT_OPTIONS,
 		mutDisplay = mutDisplay,
 	}
+	ctx.petEggMap = petEggMap
+	ctx.petBaseName = petBaseName
+	ctx.petEggLabel = petEggLabel
+	ctx.petMatchesType = petMatchesType
 end
 ]=],
 	["modules/core/services.lua"] = [=[
@@ -1150,6 +1231,11 @@ return function(ctx)
 		return center + Vector3.new(offX, 0, offZ)
 	end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	ctx.state.elephantStatus = "Idle"
 
 	-- Ringkasan statistik untuk UI Status
@@ -1170,7 +1256,7 @@ return function(ctx)
 
 		for _, v in pairs(inv) do
 			local pt = v.PetType
-			if CFG.elephantPetTypes[pt] then
+			if matchesType(CFG.elephantPetTypes, pt, v.PetData) then
 				local pd = v.PetData or {}
 				local w = pd.BaseWeight or 0
 				if not pd.IsFavorite then
@@ -1243,7 +1329,7 @@ return function(ctx)
 				local pt = pInfo and pInfo.PetType
 				local pd = pInfo and pInfo.PetData or {}
 				local w = pd.BaseWeight or 0
-				if targetTypes[pt] then
+				if matchesType(targetTypes, pt, pd) then
 					if w < targetW then
 						table.insert(currentGrowing, uuid)
 						-- catat waktu mulai growing (buat Duration di webhook per-pet)
@@ -1291,7 +1377,7 @@ return function(ctx)
 				local pt = v.PetType
 				local pd = v.PetData or {}
 				local w = pd.BaseWeight or 0
-				if not localEq[uuid] and targetTypes[pt] and w < targetW and not pd.IsFavorite then
+				if not localEq[uuid] and matchesType(targetTypes, pt, pd) and w < targetW and not pd.IsFavorite then
 					table.insert(pool, { uuid = uuid, weight = w })
 				end
 			end
@@ -1413,6 +1499,11 @@ return function(ctx)
 		return false
 	end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	----------------------------------------------------- STATUS
 	function ctx.getElephantV2Summary()
 		local _, inv = snapshot()
@@ -1425,7 +1516,7 @@ return function(ctx)
 		local targetW = CFG.elephantV2Weight or 5.5
 		local readyCount, maxKgCount = 0, 0
 		for _, v in pairs(inv) do
-			if CFG.elephantV2Types[v.PetType] then
+			if matchesType(CFG.elephantV2Types, v.PetType, v.PetData) then
 				local pd = v.PetData or {}
 				if not pd.IsFavorite then
 					if (pd.BaseWeight or 0) < targetW then readyCount = readyCount + 1 else maxKgCount = maxKgCount + 1 end
@@ -1514,7 +1605,7 @@ return function(ctx)
 				local pInfo = inv[uuid]
 				local pd = pInfo and pInfo.PetData or {}
 				local pt = pInfo and pInfo.PetType
-				if pt and targetTypes[pt] then
+				if pt and matchesType(targetTypes, pt, pd) then
 					if (pd.BaseWeight or 0) < targetW then table.insert(currentGrowing, uuid)
 					else table.insert(finishedMax, uuid) end
 				end
@@ -1534,7 +1625,7 @@ return function(ctx)
 			local pool = {}
 			for uuid, v in pairs(inv) do
 				local pd = v.PetData or {}
-				if not localEq[uuid] and targetTypes[v.PetType] and (pd.BaseWeight or 0) < targetW and not pd.IsFavorite then
+				if not localEq[uuid] and matchesType(targetTypes, v.PetType, pd) and (pd.BaseWeight or 0) < targetW and not pd.IsFavorite then
 					table.insert(pool, { uuid = uuid, weight = pd.BaseWeight or 0 })
 				end
 			end
@@ -1566,7 +1657,7 @@ return function(ctx)
 		local targetW = CFG.elephantV2Weight or 5.5
 		for _, u in ipairs(eq) do
 			local v = inv[u]
-			if v and types[v.PetType] then
+			if v and matchesType(types, v.PetType, v.PetData) then
 				local pd = v.PetData or {}
 				if (pd.BaseWeight or 0) < targetW and (pd.Level or 0) >= thr then return true end
 			end
@@ -1624,7 +1715,7 @@ return function(ctx)
 		local targetW = CFG.elephantV2Weight or 5.5
 		for _, u in ipairs(eq) do
 			local v = inv[u]
-			if v and types[v.PetType] then
+			if v and matchesType(types, v.PetType, v.PetData) then
 				local pd = v.PetData or {}
 				if (pd.BaseWeight or 0) < targetW and (pd.Level or 0) >= thr then return u, (pd.BaseWeight or 0) end
 			end
@@ -1834,7 +1925,8 @@ local function scanTargets(ctx)
 	local _, tt, tw = ecfg(ctx)
 	local byType, maxCount, remains = {}, 0, 0
 	for _, v in pairs(inv) do
-		if v.PetType and tt[v.PetType] and not (v.PetData or {}).IsFavorite then
+		local match = v.PetType and ((ctx.petMatchesType and ctx.petMatchesType(tt, v.PetType, v.PetData)) or tt[v.PetType])
+		if match and not (v.PetData or {}).IsFavorite then
 			local w = (v.PetData or {}).BaseWeight or 0
 			if w < tw then
 				remains = remains + 1
@@ -4001,6 +4093,10 @@ return function(ctx)
 	-- (elephant/mutation/leveling). Kalau ikut dihitung, pet fav yg ga pernah beres
 	-- bikin step "belum semua selesai" selamanya -> growth mandek.
 	local function isFav(pd) return (pd or {}).IsFavorite == true end
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
 	-- Flow efektif: buang step kosong/"none" (mis. cuma mau Mutation+Leveling, Step 3 dikosongin).
 	local function effFlow()
     	local out = {}
@@ -4108,7 +4204,7 @@ return function(ctx)
 		for _, v in pairs(inv) do
 			if not isFav(v.PetData) and v.PetData then   -- skip pet tanpa PetData
 				for _, s in ipairs(flow) do
-					if typesFor(s)[v.PetType] then
+					if matchesType(typesFor(s), v.PetType, v.PetData) then
 						perStep[s].total = perStep[s].total + 1
 						if stepDone(s, v.PetData) then perStep[s].done = perStep[s].done + 1 end
 					end
@@ -4192,7 +4288,7 @@ return function(ctx)
 					local pd = v.PetData
 					local lvl = pd.Level or 0
 					-- Cek apakah pet target elephant butuh up weight
-					if (tyEle[v.PetType] or tyP1[v.PetType]) and not stepDone("elephant", pd) then
+					if (matchesType(tyEle, v.PetType, pd) or matchesType(tyP1, v.PetType, pd)) and not stepDone("elephant", pd) then
 						anyNeedWeight = true
 						if lvl >= p1Target then
 							anyReadyLevel50 = true
@@ -4252,7 +4348,7 @@ return function(ctx)
 					local ty = typesFor(s)
 					local allDone = true
 					for _, v in pairs(inv) do
-						if ty[v.PetType] and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
+						if matchesType(ty, v.PetType, v.PetData) and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
 							allDone = false
 							break
 						end
@@ -4269,7 +4365,7 @@ return function(ctx)
 				local ty = typesFor(s)
 				local allDone = true
 				for _, v in pairs(inv) do
-					if ty[v.PetType] and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
+					if matchesType(ty, v.PetType, v.PetData) and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
 						allDone = false; break
 					end
 				end
@@ -4317,7 +4413,7 @@ return function(ctx)
 			local p1t = CFG.growthLevP1Target or 50
 			local phase1 = false
 			for _, v in pairs(inv) do
-				if types[v.PetType] and not isFav(v.PetData) and not stepDone("leveling", v.PetData) and ((v.PetData or {}).Level or 0) < p1t then
+				if matchesType(types, v.PetType, v.PetData) and not isFav(v.PetData) and not stepDone("leveling", v.PetData) and ((v.PetData or {}).Level or 0) < p1t then
 					phase1 = true
 					break
 				end
@@ -4386,7 +4482,7 @@ return function(ctx)
 		for uuid in pairs(localEq) do
 			if not team[uuid] then
 				local v = inv[uuid]
-				if v and types[v.PetType] then
+				if v and matchesType(types, v.PetType, v.PetData) then
 					local pd = v.PetData or {}
 					if pd.IsFavorite then
 						-- Favorite -> JANGAN cleanse, JANGAN biarin di garden. Keluarkan.
@@ -4428,7 +4524,7 @@ return function(ctx)
 							-- aura/cleanse webhook (bukan mutasi mesin)
 							local remainsM = 0
 							for _, iv in pairs(inv) do
-								if types[iv.PetType] and not isFav(iv.PetData) and not stepDone("mutation", iv.PetData) then remainsM = remainsM + 1 end
+								if matchesType(types, iv.PetType, iv.PetData) and not isFav(iv.PetData) and not stepDone("mutation", iv.PetData) then remainsM = remainsM + 1 end
 							end
 							pcall(function() ctx.webhookCleanse.sendObtained(ctx, pt, mutOf(pd), pd.Level or 0, remainsM) end)
 						elseif step == "leveling" and stepDone("leveling", pd)
@@ -4436,7 +4532,7 @@ return function(ctx)
 							-- CUMA Phase 2 (reached final). Phase 1 (P1Target) ga kirim.
 							local remains = 0
 							for _, iv in pairs(inv) do
-								if types[iv.PetType] and not isFav(iv.PetData) and not stepDone("leveling", iv.PetData) then remains = remains + 1 end
+								if matchesType(types, iv.PetType, iv.PetData) and not isFav(iv.PetData) and not stepDone("leveling", iv.PetData) then remains = remains + 1 end
 							end
 							-- Duration: dari pet masuk Phase 2 sampai capai target final (nil = Unknown)
 							local dur
@@ -4465,7 +4561,7 @@ return function(ctx)
 			local pool = {}
 			for uuid, v in pairs(inv) do
 				-- skip pet tanpa PetData agar tidak masuk garden secara salah
-				if not localEq[uuid] and types[v.PetType] and v.PetData
+				if not localEq[uuid] and matchesType(types, v.PetType, v.PetData) and v.PetData
 					and not v.PetData.IsFavorite and needsWork(v.PetData) then
 					local sortKey = v.PetData.Level or 0
 					if step == "elephant" then
@@ -4700,17 +4796,32 @@ return function(ctx)
 	end
 
 	-- filter disimpan pakai label "Pet - Egg"; cocokin pakai label yg sama.
-	local petEggLabel = (ctx.reg and ctx.reg.petEggLabel) or function(p) return p end
+	local petEggLabel = (ctx.reg and ctx.reg.petEggLabel) or (ctx.petEggLabel) or function(p) return p end
+	local petBaseName = (ctx.reg and ctx.reg.petBaseName) or (ctx.petBaseName) or function(p) return tostring(p):match("^(.-)%s*-%s*") or tostring(p) end
+
 	-- Helper pencocokan pet ke Sell & Bronto Config list
-	local function findRule(petType)
-		if not CFG.hatchSellList or not next(CFG.hatchSellList) then return nil end
+	local function findRule(petType, petData)
+		if not CFG.hatchSellList or not next(CFG.hatchSellList) or not petType then return nil end
+		-- 1. Direct match
+		if CFG.hatchSellList[petType] then return CFG.hatchSellList[petType] end
+		-- 2. Combo match (Pet - Egg) via petData / registry
+		local base = petBaseName(petType)
+		local rawName = (base ~= "" and base ~= petType) and base or petType
+		local egg = (petData and petData.HatchedFrom) or (ctx.reg and ctx.reg.petEggMap and (ctx.reg.petEggMap[rawName] or ctx.reg.petEggMap[petType]))
+		if egg then
+			local combo = rawName .. " - " .. egg
+			if CFG.hatchSellList[combo] then return CFG.hatchSellList[combo] end
+		end
+		-- 3. Label match
 		local key = petEggLabel(petType)
-		local ptLower = tostring(petType or ""):lower()
+		if CFG.hatchSellList[key] then return CFG.hatchSellList[key] end
+		-- 4. Case-insensitive / base name match
+		local ptLower = rawName:lower()
 		local keyLower = tostring(key or ""):lower()
 		for name, r in pairs(CFG.hatchSellList) do
 			local nLower = tostring(name):lower()
-			if name == petType or key == name or ptLower == nLower or keyLower == nLower
-				or keyLower:find(nLower, 1, true) or ptLower:find(nLower, 1, true) then
+			local bLower = petBaseName(name):lower()
+			if nLower == ptLower or nLower == keyLower or bLower == ptLower then
 				return r
 			end
 		end
@@ -4728,7 +4839,7 @@ return function(ctx)
 		local key = petEggLabel(petType)
 
 		-- Prioritas 1: Sell & Bronto Config List terpadu (Bulk / per-pet setting)
-		local rule = findRule(petType)
+		local rule = findRule(petType, pd)
 		if rule then
 			if rule.special == true then
 				return false -- Special pet (bintang aktif) mutlak disimpan (KEEP)
@@ -5978,7 +6089,8 @@ return function(ctx)
 				if next(CFG.favoritePetTypes or {}) then
 					for _, t in ipairs(petTools()) do
 						local pt = t:GetAttribute("f")
-						if pt and (CFG.favoritePetTypes)[pt] and not isFav(t) then
+						local matchFav = pt and (ctx.petMatchesType and ctx.petMatchesType(CFG.favoritePetTypes, pt) or (CFG.favoritePetTypes)[pt])
+						if matchFav and not isFav(t) then
 							setFav(t, true)
 						end
 					end
@@ -6001,7 +6113,7 @@ return function(ctx)
 			while CFG.autoUnfavoritePets and ctx.alive() and ctx.state.autoUnfavId == my do
 				for _, t in ipairs(petTools()) do
 					local pt = t:GetAttribute("f")
-					local match = (not next(CFG.unfavoritePetTypes or {})) or (pt and (CFG.unfavoritePetTypes)[pt])
+					local match = (not next(CFG.unfavoritePetTypes or {})) or (pt and (ctx.petMatchesType and ctx.petMatchesType(CFG.unfavoritePetTypes, pt) or (CFG.unfavoritePetTypes)[pt]))
 					if match and isFav(t) then
 						setFav(t, false)
 					end
@@ -6207,7 +6319,8 @@ return function(ctx)
 		if not (pt and pd) then return false end
 		-- filter type (kosong = semua)
 		local pTypes = isGift and CFG.giftPetTypes or CFG.petTypes
-		if pTypes and next(pTypes) and not pTypes[pt] then return false end
+		local matchType = (ctx.petMatchesType and ctx.petMatchesType(pTypes, pt, pd)) or (pTypes and pTypes[pt])
+		if pTypes and next(pTypes) and not matchType then return false end
 		-- weight: berat TAMPIL di game = BaseWeight + 0.5 (pakai angka tampilan di filter)
 		local w = (pd.BaseWeight or 0) + 0.5
 		local wf = isGift and (CFG.giftWeightFilter or 0) or (CFG.weightFilter or 0)
@@ -6788,6 +6901,11 @@ return function(ctx)
 		return center + Vector3.new(offX, 0, offZ)
 	end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	ctx.state.levelingStatus = "Idle"
 
 	-- Mendapatkan ringkasan statistik leveling untuk UI
@@ -6809,7 +6927,7 @@ return function(ctx)
 		
 		for _, v in pairs(inv) do
 			local pt = v.PetType
-			if CFG.levelingPetTypes[pt] then
+			if matchesType(CFG.levelingPetTypes, pt, v.PetData) then
 				local pd = v.PetData or {}
 				local lvl = pd.Level or 0
 				if not pd.IsFavorite then
@@ -6928,7 +7046,7 @@ return function(ctx)
 				local pd = pInfo and pInfo.PetData or {}
 				local lvl = pd.Level or 0
 
-				if targetTypes[pt] then
+				if matchesType(targetTypes, pt, pd) then
 					if lvl < targetLvl then
 						table.insert(currentLeveling, uuid)
 						-- Catat waktu mulai jika belum ada
@@ -6968,8 +7086,8 @@ return function(ctx)
 			local remainsQueue = 0
 			for otherUuid, v in pairs(inv) do
 				local pt = v.PetType
-				if targetTypes[pt] and not localEq[otherUuid] then
-					local otherPd = v.PetData or {}
+				local otherPd = v.PetData or {}
+				if matchesType(targetTypes, pt, otherPd) and not localEq[otherUuid] then
 					local otherLvl = otherPd.Level or 0
 					if otherLvl < targetLvl and not otherPd.IsFavorite then
 						remainsQueue = remainsQueue + 1
@@ -6998,7 +7116,7 @@ return function(ctx)
 				local pd = v.PetData or {}
 				local lvl = pd.Level or 0
 
-				if not localEq[uuid] and targetTypes[pt] and lvl < targetLvl and not pd.IsFavorite then
+				if not localEq[uuid] and matchesType(targetTypes, pt, pd) and lvl < targetLvl and not pd.IsFavorite then
 					table.insert(pool, { uuid = uuid, petType = pt, level = lvl })
 				end
 			end
@@ -7055,7 +7173,7 @@ return function(ctx)
 					local targetLvl = CFG.levelingTargetLevel or 500
 					for _, v in pairs(inv) do
 						local pt = v.PetType
-						if targetTypes[pt] then
+						if matchesType(targetTypes, pt, v.PetData) then
 							local pd = v.PetData or {}
 							local lvl = pd.Level or 0
 							if lvl < targetLvl then
@@ -7161,6 +7279,11 @@ return function(ctx)
 		return center + Vector3.new((col - (GRID_COLS - 1) / 2) * GRID_SP, 0, (row - 1) * GRID_SP)
 	end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	ctx.state.levelingV2Status = "Idle"
 
 	----------------------------------------------------------------- ringkasan status
@@ -7172,7 +7295,7 @@ return function(ctx)
 		local p2t = CFG.levelingV2P2Target or 500
 		local p1q, p2q, maxq = 0, 0, 0
 		for _, v in pairs(inv) do
-			if types[v.PetType] and not (v.PetData or {}).IsFavorite then
+			if matchesType(types, v.PetType, v.PetData) and not (v.PetData or {}).IsFavorite then
 				local lvl = (v.PetData or {}).Level or 0
 				if lvl < p1t then p1q = p1q + 1
 				elseif lvl < p2t then p2q = p2q + 1
@@ -7211,7 +7334,7 @@ return function(ctx)
 		-- Tentukan phase aktif: ada target pet < p1Target -> Phase 1, else Phase 2.
 		local phase1Work = 0
 		for _, v in pairs(inv) do
-			if targetTypes[v.PetType] and ((v.PetData or {}).Level or 0) < p1Target and not (v.PetData or {}).IsFavorite then phase1Work = phase1Work + 1 end
+			if matchesType(targetTypes, v.PetType, v.PetData) and ((v.PetData or {}).Level or 0) < p1Target and not (v.PetData or {}).IsFavorite then phase1Work = phase1Work + 1 end
 		end
 		local phase = (phase1Work > 0) and 1 or 2
 		ctx.state.levelingV2Phase = "Phase " .. phase
@@ -7269,7 +7392,7 @@ return function(ctx)
 		for uuid in pairs(localEq) do
 			if not team[uuid] and not otherTeam[uuid] then
 				local v = inv[uuid]
-				if v and targetTypes[v.PetType] then
+				if v and matchesType(targetTypes, v.PetType, v.PetData) then
 					local pd  = v.PetData or {}
 					local lvl = pd.Level or 0
 					if lvl >= phaseTarget then
@@ -7287,7 +7410,7 @@ return function(ctx)
 							-- Sisa antrean phase 2 (target type, level dalam [p1Target, p2Target), belum equipped, bukan favorite)
 							local remainsQueue = 0
 							for ou, ov in pairs(inv) do
-								if ou ~= uuid and not localEq[ou] and targetTypes[ov.PetType] then
+								if ou ~= uuid and not localEq[ou] and matchesType(targetTypes, ov.PetType, ov.PetData) then
 									local ol = (ov.PetData or {}).Level or 0
 									if ol >= p1Target and ol < p2Target and not (ov.PetData or {}).IsFavorite then
 										remainsQueue = remainsQueue + 1
@@ -7324,7 +7447,7 @@ return function(ctx)
 			local pool = {}
 			for uuid, v in pairs(inv) do
 				local lvl = (v.PetData or {}).Level or 0
-				if not localEq[uuid] and targetTypes[v.PetType] and lvl >= phaseMin and lvl < phaseTarget and not (v.PetData or {}).IsFavorite then
+				if not localEq[uuid] and matchesType(targetTypes, v.PetType, v.PetData) and lvl >= phaseMin and lvl < phaseTarget and not (v.PetData or {}).IsFavorite then
 					table.insert(pool, { uuid = uuid, level = lvl })
 				end
 			end
@@ -8206,6 +8329,11 @@ return function(ctx)
 		return targetMutations[display] == true
 	end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	local slotOf, nextSlot = {}, 0
 	local GRID_COLS, GRID_SP = 6, 3
 	local function getPos(uuid)
@@ -8343,7 +8471,7 @@ return function(ctx)
 
 		for _, v in pairs(inv) do
 			local pt = v.PetType
-			if CFG.mutationTargetTypes[pt] then
+			if matchesType(CFG.mutationTargetTypes, pt, v.PetData) then
 				local pd = v.PetData or {}
 				local lvl = pd.Level or 0
 				local mut = pd.MutationType or "Normal"
@@ -8414,7 +8542,7 @@ return function(ctx)
 			if okSnap and snapD and snapD.PetsData then
 				local invD = snapD.PetsData.PetInventory and snapD.PetsData.PetInventory.Data or {}
 				for u, v in pairs(invD) do
-					if targetTypes[v.PetType] then
+					if matchesType(targetTypes, v.PetType, v.PetData) then
 						preSnapshot[u] = v.PetData and v.PetData.MutationType or "Normal"
 					end
 				end
@@ -8436,7 +8564,7 @@ return function(ctx)
 			if ok3 and d3 and d3.PetsData then
 				local newInv = d3.PetsData.PetInventory and d3.PetsData.PetInventory.Data or {}
 				for u, v in pairs(newInv) do
-					if targetTypes[v.PetType] then
+					if matchesType(targetTypes, v.PetType, v.PetData) then
 						local pd = v.PetData or {}
 						local mut = pd.MutationType or "Normal"
 						if not preSnapshot[u] or preSnapshot[u] ~= mut then
@@ -8506,7 +8634,7 @@ return function(ctx)
 				local isFav = pd.IsFavorite or false
 
 				-- Hanya pet tipe target, dengan level >= targetAge, bukan favorite, dan belum memiliki mutasi target
-				if targetTypes[pt] and lvl >= targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
+				if matchesType(targetTypes, pt, pd) and lvl >= targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
 					candidateUuid = uuid
 					candidateType = pt
 					break
@@ -8592,7 +8720,7 @@ return function(ctx)
 				local mut = pd.MutationType or "Normal"
 				local isFav = pd.IsFavorite or false
 
-				if targetTypes[pt] and lvl < targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
+				if matchesType(targetTypes, pt, pd) and lvl < targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
 					-- Prioritaskan level yang paling tinggi tapi masih di bawah targetAge agar cepat jadi!
 					if not levelLvl or lvl > levelLvl then
 						levelUuid = uuid
@@ -8706,6 +8834,11 @@ return function(ctx)
 	end
 	local function cleanUuid(u) return (tostring(u):gsub("[{}]", "")) end
 
+	local function matchesType(typeSet, pt, pd)
+		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
+		return typeSet and typeSet[pt] == true
+	end
+
 	----------------------------------------------------------------- placement
 	local function farmCenter()
 		local GetFarm = require(RS.Modules.GetFarm)
@@ -8796,7 +8929,7 @@ return function(ctx)
 		for _, k in ipairs(keepOrder) do already[k] = 0 end
 		for _, v in pairs(inv) do
 			local pt = v.PetType
-			if pt and CFG.cleansePetTypes[pt] then
+			if pt and matchesType(CFG.cleansePetTypes, pt, v.PetData) then
 				local pd = v.PetData or {}
 				local disp = hasMut(pd) and mutName(pd.MutationType) or "None"
 				if CFG.cleanseKeepMutations[disp] then
@@ -8863,7 +8996,7 @@ return function(ctx)
 				local pInfo = inv[origUuid] or inv["{" .. cu .. "}"]
 				local pt = pInfo and pInfo.PetType
 				local pd = pInfo and pInfo.PetData or {}
-				if pt and targetTypes[pt] then
+				if pt and matchesType(targetTypes, pt, pd) then
 					if pd.IsFavorite then
 						-- Favorite -> JANGAN cleanse (lindungi mutasi). Keluarkan dari garden.
 						ctx.state.cleansePhase = "Skip favorite (protected)"
@@ -8883,7 +9016,7 @@ return function(ctx)
 							local remains = 0
 							for _, iv in pairs(inv) do
 								local ipt = iv.PetType
-								if ipt and targetTypes[ipt] then
+								if ipt and matchesType(targetTypes, ipt, iv.PetData) then
 									local ipd = iv.PetData or {}
 									if not ipd.IsFavorite and not isKept(ipd) then remains = remains + 1 end
 								end
@@ -8901,7 +9034,7 @@ return function(ctx)
 						-- Normal -> lagi nunggu aura
 						activeTargets = activeTargets + 1
 					end
-				elseif not (pt and targetTypes[pt]) then
+				elseif not (pt and matchesType(targetTypes, pt, pd)) then
 					-- pet lain (bukan team, bukan target) -> keluarkan
 					pcall(function() PetsService:FireServer("UnequipPet", origUuid) end)
 					localEq[cu] = nil
@@ -8917,7 +9050,7 @@ return function(ctx)
 			for uuid, v in pairs(inv) do
 				local pt = v.PetType
 				local pd = v.PetData or {}
-				if not localEq[cleanUuid(uuid)] and pt and targetTypes[pt] and not pd.IsFavorite and not isKept(pd) then
+				if not localEq[cleanUuid(uuid)] and pt and matchesType(targetTypes, pt, pd) and not pd.IsFavorite and not isKept(pd) then
 					pool[#pool + 1] = uuid
 				end
 			end

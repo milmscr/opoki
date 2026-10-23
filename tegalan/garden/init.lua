@@ -78,6 +78,18 @@ function ctx.elevate()
 	end)
 end
 
+function ctx.isPetBusy()
+	local s = ctx.state
+	if not s then return false end
+	return s.teamSwapActive == true
+		or s.pnpBlockedByHatch == true
+		or s.isSwappingPet == true
+		or s.petLock == true
+		or s.growthClearing == true
+		or s.levelingV2Clearing == true
+		or s.clearGardenId ~= nil
+end
+
 -- Logo AH buat tombol minimize. Download sekali, cache via getcustomasset (fallback: teks "AH").
 function ctx.getLogo()
 	if _G.__AH_LOGO ~= nil then return _G.__AH_LOGO or nil end

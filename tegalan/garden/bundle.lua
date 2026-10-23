@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-23T00:42:22.581Z
+-- 43 modul, di-generate 2026-10-23T01:28:14.846Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -379,7 +379,7 @@ return function(ctx)
 		-- PnP V1 (polling)
 		pnpUuids    = {},     -- filter per-UUID pet equipped; kosong = semua equipped
 		pickupDelay = 0.3,    -- jeda setelah place sebelum siklus berikutnya
-		equipDelay  = 1e-20,  -- jeda antara unequip -> equip (1E-20 = near-zero instant)
+		equipDelay  = 0,      -- jeda antara unequip -> equip (aman dari race condition)
 		pnpScanInterval = 0.05, -- jeda antar-scan loop PNP (makin kecil = makin sering cek)
 		pnpEnabled  = false,
 		-- PnP V2 (event-driven, config terpisah dari V1)
@@ -697,7 +697,7 @@ return function(ctx)
 			CFG.pnpPetTypes = (type(st.pnpPetTypes) == "table") and st.pnpPetTypes or {}
 			CFG.pnpUuids    = (type(st.pnpUuids) == "table") and st.pnpUuids or {}
 			CFG.pickupDelay = tonumber(st.pickupDelay) or 0.3
-			CFG.equipDelay  = tonumber(st.equipDelay) or 1e-20
+			CFG.equipDelay  = tonumber(st.equipDelay) or 0
 			CFG.pnpScanInterval = tonumber(st.pnpScanInterval) or 0.05
 			CFG.pnpEnabled  = st.pnpEnabled or false
 			CFG.pnpV2Uuids       = (type(st.pnpV2Uuids) == "table") and st.pnpV2Uuids or {}
@@ -9582,7 +9582,6 @@ return function(ctx)
 			if pos and mainCd ~= nil and mainCd <= READY_TH then
 				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 				if (CFG.equipDelay or 0) > 0 then task.wait(CFG.equipDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
@@ -13373,36 +13372,16 @@ return function(ctx)
 	local pet = pageRef["Pet"]
 	local v1Render, v2Render -- buat sync visual mutual-exclusion
 
-	local petSub = makeSubTabs(pet, {
-		{ id = "v1",    name = "PnP V1" },
-		{ id = "v2",    name = "PnP V2" },
-		{ id = "boost", name = "Boost Pet" },
-	}, "v1", { hasBottomBar = false, hasInfoLine = false })
-
-	local pPetV1 = petSub.pages["v1"]
-	local pPetV2 = petSub.pages["v2"]
-	local pPetBoost = petSub.pages["boost"]
-
 	------------------------------------------------------------------ PnP V1 (polling)
-	local pnp = makeAccordion(pPetV1, "Automation Pickup Pet V1", 1, true)
+	local pnp = makeAccordion(pet, "Automation Pickup Pet V1", 1, true)
 	makeMultiDropdownDyn(pnp, "Select Pets for Pickup [V1]", "Pilih pet dari backpack (kosong = semua yg di garden)",
 		function() return ctx.inventoryPetOptions(CFG.pnpUuids) end, CFG.pnpUuids, function() persist() end, 1)
 	makeInput(pnp, "Pickup Delay (Seconds) [V1]", "Jeda tiap siklus (idealnya = saat skill ready)",
 		function() return CFG.pickupDelay end,
 		function(txt) CFG.pickupDelay = tonumber(txt) or 0.3; persist() end, 2)
 	makeInput(pnp, "Equip Delay (Seconds) [V1]", "Jeda antara unequip -> equip",
-		function()
-			if CFG.equipDelay == 1e-20 or CFG.equipDelay == 0 or not CFG.equipDelay then return "1E-20" end
-			return tostring(CFG.equipDelay)
-		end,
-		function(txt)
-			if tostring(txt):upper():find("1E%-20") then
-				CFG.equipDelay = 1e-20
-			else
-				CFG.equipDelay = tonumber(txt) or 1e-20
-			end
-			persist()
-		end, 3)
+		function() return CFG.equipDelay end,
+		function(txt) CFG.equipDelay = tonumber(txt) or 0; persist() end, 3)
 	makeInput(pnp, "Scan Interval (Seconds) [V1]", "Frekuensi cek cooldown (kecil = makin ketat, min 0.01)",
 		function() return CFG.pnpScanInterval end,
 		function(txt) CFG.pnpScanInterval = math.max(0.01, tonumber(txt) or 0.05); persist() end, 4)
@@ -13421,7 +13400,7 @@ return function(ctx)
 		end, 5)
 
 	------------------------------------------------------------------ PnP V2 (event-driven)
-	local pnp2 = makeAccordion(pPetV2, "Automation Pickup Pet V2", 1, true)
+	local pnp2 = makeAccordion(pet, "Automation Pickup Pet V2", 2, false)
 	makeMultiDropdownDyn(pnp2, "Select Pets for Pickup [V2]", "Pilih pet dari backpack (kosong = semua yg di garden)",
 		function() return ctx.inventoryPetOptions(CFG.pnpV2Uuids) end, CFG.pnpV2Uuids, function() persist() end, 1)
 	makeInput(pnp2, "Pickup Delay (Seconds) [V2]", "Jeda sebelum tiap pickup",
@@ -13448,7 +13427,7 @@ return function(ctx)
 		end, 5)
 
 	-- Accordion: Automation Boost Pet
-	local boostAcc = makeAccordion(pPetBoost, "Automation Boost Pet", 1, true)
+	local boostAcc = makeAccordion(pet, "Automation Boost Pet", 3, false)
 	makeMultiDropdownDyn(boostAcc, "Select Pets to Boost", "Pilih pet yang mau di-boost (aktif di garden)",
 		function() return ctx.inventoryPetOptions(CFG.boostPetUuids) end, CFG.boostPetUuids, function() persist() end, 1)
 	makeMultiDropdownDyn(boostAcc, "Select Boost Items", "Pilih item boost (Pet Toy) yang dipakai",

@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-23T02:56:12.044Z
+-- 43 modul, di-generate 2026-10-23T03:22:20.070Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -13510,7 +13510,7 @@ return function(ctx)
 			if v then
 				CFG.pnpV2Enabled = false; persist()
 				if ctx.stopPnpV2 then ctx.stopPnpV2() end
-				if v2Render then v2Render() end -- sync visual toggle V2 -> OFF
+				if type(v2Render) == 'function' then pcall(v2Render) elseif type(v2Render) == 'table' and type(v2Render.refresh) == 'function' then pcall(v2Render.refresh) end
 				if ctx.startPnpV1 then ctx.startPnpV1() end
 			else
 				if ctx.stopPnpV1 then ctx.stopPnpV1() end
@@ -13537,7 +13537,7 @@ return function(ctx)
 			if v then
 				CFG.pnpEnabled = false; persist()
 				if ctx.stopPnpV1 then ctx.stopPnpV1() end
-				if v1Render then v1Render() end -- sync visual toggle V1 -> OFF
+				if type(v1Render) == 'function' then pcall(v1Render) elseif type(v1Render) == 'table' and type(v1Render.refresh) == 'function' then pcall(v1Render.refresh) end
 				if ctx.startPnpV2 then ctx.startPnpV2() end
 			else
 				if ctx.stopPnpV2 then ctx.stopPnpV2() end
@@ -14994,6 +14994,11 @@ return function(ctx)
 			Get = function(self) return curVal end,
 			refresh = function() if type(getv) == "function" then setVal(getv(), true) end end,
 		}
+		setmetatable(comp, {
+			__call = function(t)
+				if type(getv) == "function" then setVal(getv(), true) end
+			end,
+		})
 		return comp
 	end
 

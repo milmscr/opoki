@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-22T00:01:32.034Z
+-- 43 modul, di-generate 2026-10-23T00:42:22.581Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -9489,18 +9489,6 @@ return function(ctx)
 		if not eq then return out end
 		local sel = CFG.pnpUuids or {}
 		for _, uuid in ipairs(eq) do
-			-- Proteksi Auto Hatch: jangan sentuh pet yang merupakan anggota Hatch/Bronto/Sell team
-			if CFG.hatchEnabled then
-				if (CFG.hatchHatchTeam and CFG.hatchHatchTeam[uuid])
-				   or (CFG.hatchBrontoTeam and CFG.hatchBrontoTeam[uuid])
-				   or (CFG.hatchSellTeam and CFG.hatchSellTeam[uuid]) then
-					continue
-				end
-				-- Jika Core Team ditentukan di config Hatch, hanya target pet Core Team
-				if next(CFG.hatchCoreTeam or {}) and not CFG.hatchCoreTeam[uuid] then
-					continue
-				end
-			end
 			local pt = inv and inv[uuid] and inv[uuid].PetType
 			if (not next(sel)) or sel[uuid] then
 				out[#out + 1] = { uuid = uuid, petType = pt }
@@ -9583,12 +9571,6 @@ return function(ctx)
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
-			-- Jika Auto Hatch sedang swap team atau di fase non-Core (Hatching / Selling), jeda PNP
-			if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then
-				task.wait(0.5)
-				continue
-			end
-
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
 				if p.uuid == uuid then stillTarget = true; break end
@@ -9600,13 +9582,10 @@ return function(ctx)
 			if pos and mainCd ~= nil and mainCd <= READY_TH then
 				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-				if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then break end
 
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 				if (CFG.equipDelay or 0) > 0 then task.wait(CFG.equipDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-				if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then break end
-
 				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 			end
 			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
@@ -9619,12 +9598,6 @@ return function(ctx)
 		local myId = ctx.state.pnpV1Id
 		ctx.elevate()
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
-			if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then
-				setStatus("PNP V1: dijeda (Hatch/Sell team aktif)")
-				task.wait(1)
-				continue
-			end
-
 			local pets = targetPets()
 			if #pets == 0 then
 				setStatus("PNP V1: tidak ada pet target (equip pet dulu)")
@@ -9705,18 +9678,6 @@ return function(ctx)
 		if not eq then return out end
 		local sel = CFG.pnpV2Uuids or {}
 		for _, uuid in ipairs(eq) do
-			-- Proteksi Auto Hatch: jangan sentuh pet yang merupakan anggota Hatch/Bronto/Sell team
-			if CFG.hatchEnabled then
-				if (CFG.hatchHatchTeam and CFG.hatchHatchTeam[uuid])
-				   or (CFG.hatchBrontoTeam and CFG.hatchBrontoTeam[uuid])
-				   or (CFG.hatchSellTeam and CFG.hatchSellTeam[uuid]) then
-					continue
-				end
-				-- Jika Core Team ditentukan di config Hatch, hanya target pet Core Team
-				if next(CFG.hatchCoreTeam or {}) and not CFG.hatchCoreTeam[uuid] then
-					continue
-				end
-			end
 			local pt = inv and inv[uuid] and inv[uuid].PetType
 			if (not next(sel)) or sel[uuid] then
 				out[#out + 1] = { uuid = uuid, petType = pt }
@@ -9742,12 +9703,6 @@ return function(ctx)
 		petThreads[uuid] = true
 		if cdLive[uuid] == nil then seedCd(uuid) end
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
-			-- Jika Auto Hatch sedang swap team atau di fase non-Core (Hatching / Selling), jeda PNP
-			if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then
-				task.wait(0.5)
-				continue
-			end
-
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
 				if p.uuid == uuid then stillTarget = true; break end
@@ -9759,13 +9714,9 @@ return function(ctx)
 			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
 				if (CFG.pnpV2PickupDelay or 0) > 0 then task.wait(CFG.pnpV2PickupDelay) end
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-				if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then break end
-
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 				task.wait(math.max(0.01, CFG.pnpV2EquipDelay or 0.03))
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-				if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then break end
-
 				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 				lastPlace[uuid] = os.clock()
 			end
@@ -9779,12 +9730,6 @@ return function(ctx)
 		local myId = ctx.state.pnpV2Id
 		ctx.elevate()
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
-			if ctx.state.teamSwapActive or ctx.state.pnpBlockedByHatch then
-				setStatus("PNP V2: dijeda (Hatch/Sell team aktif)")
-				task.wait(1)
-				continue
-			end
-
 			local pets = targetPets()
 			if #pets == 0 then
 				setStatus("PNP V2: tidak ada pet target (equip pet dulu)")

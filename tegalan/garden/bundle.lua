@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-23T02:05:03.097Z
+-- 43 modul, di-generate 2026-10-23T02:26:48.831Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -9583,7 +9583,7 @@ return function(ctx)
 				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
+				if (CFG.equipDelay or 0) > 0 then task.wait(CFG.equipDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
 				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 			end
@@ -9700,7 +9700,6 @@ return function(ctx)
 	local lastPlace = {}
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
-		if cdLive[uuid] == nil then seedCd(uuid) end
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
@@ -9708,18 +9707,20 @@ return function(ctx)
 			end
 			if not stillTarget then break end
 
+			if cdLive[uuid] == nil then seedCd(uuid) end
 			local cd = cdLive[uuid]
 			local pos = placePos()
-			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) >= (tonumber(CFG.pnpV2PickupDelay) or 0) then
 				if (CFG.pnpV2PickupDelay or 0) > 0 then task.wait(CFG.pnpV2PickupDelay) end
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				task.wait(math.max(0.01, CFG.pnpV2EquipDelay or 0.03))
+				if (CFG.pnpV2EquipDelay or 0) > 0 then task.wait(CFG.pnpV2EquipDelay) end
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
 				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+				cdLive[uuid] = nil
 				lastPlace[uuid] = os.clock()
 			end
-			task.wait(math.max(0.02, tonumber(CFG.pnpV2ScanInterval) or 0.05))
+			task.wait(math.max(0.01, tonumber(CFG.pnpV2ScanInterval) or 0.05))
 		end
 		petThreads[uuid] = nil
 	end

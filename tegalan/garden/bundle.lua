@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-23T04:44:47.910Z
+-- 43 modul, di-generate 2026-10-24T03:19:18.052Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -1297,21 +1297,18 @@ return function(ctx)
 		if ctx.state.elephantFirstRun then
 			ctx.state.elephantFirstRun = false
 			if #eq > 0 then
-				ctx.state.isSwappingPet = true
 				ctx.state.elephantStatus = "Resetting garden..."
 				for _, uuid in ipairs(eq) do
 					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 					localEq[uuid] = nil; localEqCount = localEqCount - 1
 					task.wait(0.25)
 				end
-				ctx.state.isSwappingPet = false
 			end
 		end
 
 		-- B. PERSISTENSI TEAM: pasang lagi pet team yang kecabut
 		for uuid, _ in pairs(teamSet) do
 			if not localEq[uuid] then
-				ctx.state.isSwappingPet = true
 				ctx.state.elephantStatus = "Re-equipping team..."
 				local pos = getPos(uuid)
 				if pos then
@@ -1319,7 +1316,6 @@ return function(ctx)
 					localEq[uuid] = true; localEqCount = localEqCount + 1
 					task.wait(0.3)
 				end
-				ctx.state.isSwappingPet = false
 			end
 		end
 
@@ -1391,7 +1387,6 @@ return function(ctx)
 				local target = pool[i]
 				local pos = getPos(target.uuid)
 				if pos then
-					ctx.state.isSwappingPet = true
 					if localEqCount >= 15 and #otherEquipped > 0 then
 						local toRemove = table.remove(otherEquipped)
 						pcall(function() PetsService:FireServer("UnequipPet", toRemove) end)
@@ -1404,7 +1399,6 @@ return function(ctx)
 					ctx.state.elephantStartTime = ctx.state.elephantStartTime or {}
 					ctx.state.elephantStartTime[target.uuid] = os.time()
 					task.wait(0.3)
-					ctx.state.isSwappingPet = false
 				end
 			end
 		end
@@ -1676,51 +1670,41 @@ return function(ctx)
 	-- beneran kosong. Kalau Switch lagi ga ke-equip DAN garden penuh -> SKIP (biar
 	-- ga bump pet lain sembarangan). Ini kunci: slot bebas WAJIB dari switch dulu.
 	local function swapInGajah(gajah, switch)
-		ctx.state.isSwappingPet = true
-		local ok, res = pcall(function()
-			local eq = snapshot()
-			if isEquipped(eq, gajah) then return true end
-			local pos = farmCenter()
-			if isEquipped(eq, switch) then
-				-- cabut switch, TUNGGU beneran kecabut (slot bebas), baru masukin gajah
-				pcall(function() PetsService:FireServer("UnequipPet", switch) end)
-				for _ = 1, 8 do
-					task.wait(0.04)
-					eq = snapshot()
-					if not isEquipped(eq, switch) then break end
-				end
-				if isEquipped(eq, switch) then return false end -- gagal cabut switch, jangan equip
-			elseif eqCount(eq) >= 8 then
-				return false -- switch ga ada & garden penuh -> jangan bump pet lain
+		local eq = snapshot()
+		if isEquipped(eq, gajah) then return true end
+		local pos = farmCenter()
+		if isEquipped(eq, switch) then
+			-- cabut switch, TUNGGU beneran kecabut (slot bebas), baru masukin gajah
+			pcall(function() PetsService:FireServer("UnequipPet", switch) end)
+			for _ = 1, 8 do
+				task.wait(0.04)
+				eq = snapshot()
+				if not isEquipped(eq, switch) then break end
 			end
-			-- slot dijamin ada (dari switch / emang kosong)
-			if pos then pcall(function() PetsService:FireServer("EquipPet", gajah, CFrame.new(pos)) end) end
-			for _ = 1, 3 do task.wait(0.06); if isEquipped(snapshot(), gajah) then return true end end
-			return false
-		end)
-		ctx.state.isSwappingPet = false
-		return ok and res or false
+			if isEquipped(eq, switch) then return false end -- gagal cabut switch, jangan equip
+		elseif eqCount(eq) >= 8 then
+			return false -- switch ga ada & garden penuh -> jangan bump pet lain
+		end
+		-- slot dijamin ada (dari switch / emang kosong)
+		if pos then pcall(function() PetsService:FireServer("EquipPet", gajah, CFrame.new(pos)) end) end
+		for _ = 1, 3 do task.wait(0.06); if isEquipped(snapshot(), gajah) then return true end end
+		return false
 	end
 
 	-- Keluarin GAJAH: cabut gajah, balikin SWITCH ke slot yang bebas.
 	local function swapOutGajah(gajah, switch)
-		ctx.state.isSwappingPet = true
-		local ok, res = pcall(function()
-			local eq = snapshot()
-			if not isEquipped(eq, gajah) then return true end
-			local pos = farmCenter()
-			pcall(function() PetsService:FireServer("UnequipPet", gajah) end)
-			for _ = 1, 8 do
-				task.wait(0.04)
-				eq = snapshot()
-				if not isEquipped(eq, gajah) then break end
-			end
-			-- reserved mode (switch kosong): slot dibiarin kosong, JANGAN equip apa2 (biar PnP aman)
-			if switch and switch ~= "" and pos then pcall(function() PetsService:FireServer("EquipPet", switch, CFrame.new(pos)) end) end
-			return true
-		end)
-		ctx.state.isSwappingPet = false
-		return ok and res or false
+		local eq = snapshot()
+		if not isEquipped(eq, gajah) then return true end
+		local pos = farmCenter()
+		pcall(function() PetsService:FireServer("UnequipPet", gajah) end)
+		for _ = 1, 8 do
+			task.wait(0.04)
+			eq = snapshot()
+			if not isEquipped(eq, gajah) then break end
+		end
+		-- reserved mode (switch kosong): slot dibiarin kosong, JANGAN equip apa2 (biar PnP aman)
+		if switch and switch ~= "" and pos then pcall(function() PetsService:FireServer("EquipPet", switch, CFrame.new(pos)) end) end
+		return true
 	end
 
 	-- Cari 1 pet target yang lagi ke-equip, tipe cocok, weight < target, level >= ambang.
@@ -4485,10 +4469,8 @@ return function(ctx)
 				teamComplete = false
 				local pos = getPos(uuid)
 				if pos then
-					ctx.state.isSwappingPet = true
 					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 					task.wait(0.15)
-					ctx.state.isSwappingPet = false
 				end
 			end
 		end
@@ -7031,7 +7013,6 @@ return function(ctx)
 		if ctx.state.levelingFirstRun then
 			ctx.state.levelingFirstRun = false
 			if #eq > 0 then
-				ctx.state.isSwappingPet = true
 				ctx.state.levelingStatus = "Resetting garden..."
 				for _, uuid in ipairs(eq) do
 					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
@@ -7039,14 +7020,12 @@ return function(ctx)
 					localEqCount = localEqCount - 1
 					task.wait(0.25)
 				end
-				ctx.state.isSwappingPet = false
 			end
 		end
 
 		-- B. DETEKSI PERSISTENSI TEAM: Pasang kembali pet team yang dicabut oleh user/game
 		for uuid, _ in pairs(teamSet) do
 			if not localEq[uuid] then
-				ctx.state.isSwappingPet = true
 				ctx.state.levelingStatus = "Re-equipping team..."
 				local pos = getPos(uuid)
 				if pos then
@@ -7055,7 +7034,6 @@ return function(ctx)
 					localEqCount = localEqCount + 1
 					task.wait(0.3)
 				end
-				ctx.state.isSwappingPet = false
 			end
 		end
 
@@ -7151,7 +7129,6 @@ return function(ctx)
 				local target = pool[i]
 				local pos = getPos(target.uuid)
 				if pos then
-					ctx.state.isSwappingPet = true
 					-- Jika total equipped secara lokal penuh (misal >= 15), copot non-team non-leveling
 					if localEqCount >= 15 and #otherEquipped > 0 then
 						local toRemove = table.remove(otherEquipped)
@@ -7169,7 +7146,6 @@ return function(ctx)
 					ctx.state.levelingStartTime = ctx.state.levelingStartTime or {}
 					ctx.state.levelingStartTime[target.uuid] = os.time()
 					task.wait(0.3)
-					ctx.state.isSwappingPet = false
 				end
 			end
 		end
@@ -7404,10 +7380,8 @@ return function(ctx)
 				teamComplete = false
 				local pos = getPos(uuid)
 				if pos then
-					ctx.state.isSwappingPet = true
 					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 					task.wait(0.25)
-					ctx.state.isSwappingPet = false
 				end
 			end
 		end
@@ -7484,7 +7458,6 @@ return function(ctx)
 			for i = 1, math.min(needed, #pool) do
 				local pos = getPos(pool[i].uuid)
 				if pos then
-					ctx.state.isSwappingPet = true
 					pcall(function() PetsService:FireServer("EquipPet", pool[i].uuid, CFrame.new(pos)) end)
 					localEq[pool[i].uuid] = true
 					table.insert(active, pool[i].uuid)
@@ -7494,7 +7467,6 @@ return function(ctx)
 						ctx.state.levelingV2StartTime[pool[i].uuid] = os.time()
 					end
 					task.wait(0.25)
-					ctx.state.isSwappingPet = false
 				end
 			end
 		end
@@ -8389,7 +8361,6 @@ return function(ctx)
 			targetActive[cleanUuid(u)] = true
 		end
 
-		ctx.state.isSwappingPet = true
 		for attempt = 1, 3 do
 			local ok, d = pcall(function() return DataService:GetData() end)
 			if not ok or not d or not d.PetsData then break end
@@ -8441,8 +8412,6 @@ return function(ctx)
 			end
 			task.wait(0.3)
 		end
-
-		ctx.state.isSwappingPet = false
 
 		-- Verifikasi kelengkapan: SEMUA anggota target harus benar-benar ke-equip (no miss).
 		local ok, d = pcall(function() return DataService:GetData() end)
@@ -9499,18 +9468,6 @@ return function(ctx)
 
 	local GetPetCooldown = RS:WaitForChild("GameEvents"):WaitForChild("GetPetCooldown")
 
-	local function isPnpYielding()
-		if ctx.isPetBusy then return ctx.isPetBusy() end
-		local s = ctx.state or {}
-		return s.teamSwapActive == true
-			or s.pnpBlockedByHatch == true
-			or s.isSwappingPet == true
-			or s.petLock == true
-			or s.growthClearing == true
-			or s.levelingV2Clearing == true
-			or s.clearGardenId ~= nil
-	end
-
 	local function readMainCd(uuid)
 		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
 		if not ok or type(cd) ~= "table" then return nil end
@@ -9530,37 +9487,20 @@ return function(ctx)
 		local out = {}
 		local ok, d = pcall(function() return DataService:GetData() end)
 		if not ok or not d then return out end
-		local eq  = (d.PetsData and d.PetsData.EquippedPets) or {}
-		local inv = (d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data) or {}
-		local eqSet = {}
-		for _, u in ipairs(eq) do eqSet[u] = true end
+		local eq  = d.PetsData and d.PetsData.EquippedPets
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not eq then return out end
 		local sel = CFG.pnpUuids or {}
-
-		if next(sel) then
-			for uuid in pairs(sel) do
-				if inv[uuid] and eqSet[uuid] then
-					out[#out + 1] = {
-						uuid = uuid,
-						petType = inv[uuid].PetType,
-						isEquipped = true,
-					}
-				end
-			end
-		else
-			for _, uuid in ipairs(eq) do
-				local pt = inv[uuid] and inv[uuid].PetType
-				out[#out + 1] = {
-					uuid = uuid,
-					petType = pt,
-					isEquipped = true,
-				}
+		for _, uuid in ipairs(eq) do
+			local pt = inv and inv[uuid] and inv[uuid].PetType
+			if (not next(sel)) or sel[uuid] then
+				out[#out + 1] = { uuid = uuid, petType = pt }
 			end
 		end
 		return out
 	end
 
-	-- daftar pet dari INVENTORY buat dropdown Select Pets (SHARED: dipakai V1 & V2, serta semua Team).
-	-- HANYA menampilkan pet yang difavoritkan (IsFavorite == true), agar tidak tercampur dengan pet target non-favorit.
+	-- daftar pet dari INVENTORY buat dropdown Select Pets (SHARED: dipakai V1 & V2).
 	function ctx.inventoryPetOptions(selectedSet)
 		local out = {}
 		local ok, d = pcall(function() return DataService:GetData() end)
@@ -9569,36 +9509,20 @@ return function(ctx)
 		if not inv then return out end
 		local eq = d.PetsData.EquippedPets or {}
 		local eqSet = {}; for _, u in ipairs(eq) do eqSet[u] = true end
-
-		-- Cek apakah ada pet yang difavoritkan di inventory
-		local anyFav = false
-		for _, v in pairs(inv) do
-			if v.PetData and v.PetData.IsFavorite then
-				anyFav = true
-				break
-			end
-		end
-
 		for uuid, v in pairs(inv) do
+			local pt = v.PetType or "?"
 			local pd = v.PetData or {}
-			local isFav = (pd.IsFavorite == true)
-			-- Filter favorit: jika ada pet favorit, hanya tampilkan yang favorit atau yang sedang terpilih di selectedSet.
-			-- Jika belum ada pet favorit sama sekali di inventory, tampilkan semua sebagai fallback.
-			if (not anyFav) or isFav or (selectedSet and selectedSet[uuid]) then
-				local pt = v.PetType or "?"
-				local age = pd.Level or 0
-				local mut = pd.MutationType
-				local mutName = mut
-				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
-				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and (tostring(mutName) .. " ") or ""
-				local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
-				local tag = eqSet[uuid] and " [aktif]" or ""
-				local favTag = isFav and "⭐ " or ""
-				out[#out + 1] = {
-					value = uuid,
-					display = ("%s%s%s • %.2f KG • Lvl %s • #%s%s"):format(favTag, mutPrefix, pt, weight, tostring(age), uuid:sub(2, 5), tag),
-				}
-			end
+			local age = pd.Level or 0
+			local mut = pd.MutationType
+			local mutName = mut
+			if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
+			local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and (tostring(mutName) .. " ") or ""
+			local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
+			local tag = eqSet[uuid] and " [aktif]" or ""
+			out[#out + 1] = {
+				value = uuid,
+				display = ("%s%s | %.2f KG | Age %s | #%s%s"):format(mutPrefix, pt, weight, tostring(age), uuid:sub(2, 5), tag),
+			}
 		end
 		if selectedSet and next(inv) then
 			local valid = {}
@@ -9630,98 +9554,50 @@ return function(ctx)
 
 	----------------------------------------------------------------- loop (polling, paralel per-pet)
 	local petThreads = {}
-
-	local function isStillTarget(uuid)
-		local sel = CFG.pnpUuids or {}
-		if next(sel) and not sel[uuid] then
-			return false
-		end
-		local ok, d = pcall(function() return DataService:GetData() end)
-		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
-		return inv and inv[uuid] ~= nil
-	end
-
 	local function runPetThread(uuid, myId)
-		petThreads[uuid] = myId
-
+		petThreads[uuid] = true
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
-			-- 1. Mengalah jika ada pergantian pet / team swap / hatch aktif
-			if isPnpYielding() then
-				task.wait(0.5)
-			else
-				-- 2. Cek apakah pet masih dipilih sebagai target
-				if not isStillTarget(uuid) then break end
-
-				-- 3. Cek apakah pet ada di garden saat ini (tidak sedang dicabut oleh automation lain)
-				local ok, d = pcall(function() return DataService:GetData() end)
-				local eq = ok and d and d.PetsData and d.PetsData.EquippedPets or {}
-				local inGarden = false
-				for _, u in ipairs(eq) do
-					if u == uuid then inGarden = true; break end
-				end
-
-				if not inGarden then
-					-- Pet sedang tidak di garden (dicabut oleh automation lain misal saat swap team)
-					-- Mengalah: tunggu sampai pet dipasang kembali oleh automation pemiliknya
-					task.wait(0.5)
-				else
-					local mainCd = readMainCd(uuid)
-					local curPos = placePos()
-					if curPos and mainCd ~= nil and mainCd <= READY_TH then
-						if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
-						if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-						-- Pastikan tidak ada pergantian pet yang baru dimulai tepat sebelum unequip
-						if not isPnpYielding() then
-							pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-							if (CFG.equipDelay or 0) > 0 then task.wait(CFG.equipDelay) end
-							pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(curPos)) end)
-						end
-					end
-					task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
-				end
+			local stillTarget = false
+			for _, p in ipairs(targetPets()) do
+				if p.uuid == uuid then stillTarget = true; break end
 			end
-		end
+			if not stillTarget then break end
 
-		if petThreads[uuid] == myId then
-			petThreads[uuid] = nil
+			local mainCd = readMainCd(uuid)
+			local pos = placePos()
+			if pos and mainCd ~= nil and mainCd <= READY_TH then
+				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
+				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
+				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+			end
+			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
 		end
+		petThreads[uuid] = nil
 	end
 
 	local function pnpLoop()
 		ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1
 		local myId = ctx.state.pnpV1Id
-		table.clear(petThreads)
 		ctx.elevate()
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
-			if isPnpYielding() then
-				setStatus("PNP V1: mengalah (pergantian pet aktif)")
-				task.wait(0.5)
+			local pets = targetPets()
+			if #pets == 0 then
+				setStatus("PNP V1: tidak ada pet target (equip pet dulu)")
 			else
-				local pets = targetPets()
-				if #pets == 0 then
-					setStatus("PNP V1: tidak ada pet target (equip pet dulu)")
-				else
-					for _, p in ipairs(pets) do
-						if petThreads[p.uuid] ~= myId then
-							petThreads[p.uuid] = myId
-							task.spawn(runPetThread, p.uuid, myId)
-						end
-					end
-					setStatus(("PNP V1 (polling): %d pet"):format(#pets))
+				for _, p in ipairs(pets) do
+					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
 				end
-				task.wait(1)
+				setStatus(("PNP V1 (polling): %d pet"):format(#pets))
 			end
+			task.wait(1)
 		end
 	end
 
-	function ctx.startPnpV1()
-		task.spawn(pnpLoop)
-	end
-
-	function ctx.stopPnpV1()
-		ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1
-		table.clear(petThreads)
-	end
+	function ctx.startPnpV1() task.spawn(pnpLoop) end
+	function ctx.stopPnpV1() ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1 end -- bump id -> loop lama mati
 end
 ]=],
 	["modules/pet/automation_pickup_pet_v2.lua"] = [=[
@@ -9746,18 +9622,6 @@ return function(ctx)
 	local GameEvents = RS:WaitForChild("GameEvents")
 	local GetPetCooldown = GameEvents:WaitForChild("GetPetCooldown")           -- seed awal
 	local PetCooldownsUpdated = GameEvents:WaitForChild("PetCooldownsUpdated") -- push cd real-time
-
-	local function isPnpYielding()
-		if ctx.isPetBusy then return ctx.isPetBusy() end
-		local s = ctx.state or {}
-		return s.teamSwapActive == true
-			or s.pnpBlockedByHatch == true
-			or s.isSwappingPet == true
-			or s.petLock == true
-			or s.growthClearing == true
-			or s.levelingV2Clearing == true
-			or s.clearGardenId ~= nil
-	end
 
 	local function computeMainCd(cd)
 		if type(cd) ~= "table" then return nil end
@@ -9794,30 +9658,14 @@ return function(ctx)
 		local out = {}
 		local ok, d = pcall(function() return DataService:GetData() end)
 		if not ok or not d then return out end
-		local eq  = (d.PetsData and d.PetsData.EquippedPets) or {}
-		local inv = (d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data) or {}
-		local eqSet = {}
-		for _, u in ipairs(eq) do eqSet[u] = true end
+		local eq  = d.PetsData and d.PetsData.EquippedPets
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not eq then return out end
 		local sel = CFG.pnpV2Uuids or {}
-
-		if next(sel) then
-			for uuid in pairs(sel) do
-				if inv[uuid] and eqSet[uuid] then
-					out[#out + 1] = {
-						uuid = uuid,
-						petType = inv[uuid].PetType,
-						isEquipped = true,
-					}
-				end
-			end
-		else
-			for _, uuid in ipairs(eq) do
-				local pt = inv[uuid] and inv[uuid].PetType
-				out[#out + 1] = {
-					uuid = uuid,
-					petType = pt,
-					isEquipped = true,
-				}
+		for _, uuid in ipairs(eq) do
+			local pt = inv and inv[uuid] and inv[uuid].PetType
+			if (not next(sel)) or sel[uuid] then
+				out[#out + 1] = { uuid = uuid, petType = pt }
 			end
 		end
 		return out
@@ -9836,108 +9684,52 @@ return function(ctx)
 	----------------------------------------------------------------- loop (event-driven, paralel per-pet)
 	local petThreads = {}
 	local lastPlace = {}
-
-	local function isStillTarget(uuid)
-		local sel = CFG.pnpV2Uuids or {}
-		if next(sel) and not sel[uuid] then
-			return false
-		end
-		local ok, d = pcall(function() return DataService:GetData() end)
-		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
-		return inv and inv[uuid] ~= nil
-	end
-
 	local function runPetThread(uuid, myId)
-		petThreads[uuid] = myId
-
+		petThreads[uuid] = true
 		if cdLive[uuid] == nil then seedCd(uuid) end
-
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
-			-- 1. Mengalah jika ada pergantian pet / team swap / hatch aktif
-			if isPnpYielding() then
-				task.wait(0.5)
-			else
-				-- 2. Cek apakah pet masih dipilih sebagai target
-				if not isStillTarget(uuid) then break end
-
-				-- 3. Cek apakah pet ada di garden saat ini (tidak sedang dicabut oleh automation lain)
-				local ok, d = pcall(function() return DataService:GetData() end)
-				local eq = ok and d and d.PetsData and d.PetsData.EquippedPets or {}
-				local inGarden = false
-				for _, u in ipairs(eq) do
-					if u == uuid then inGarden = true; break end
-				end
-
-				if not inGarden then
-					-- Pet sedang tidak di garden (dicabut oleh automation lain misal saat swap team)
-					-- Mengalah: tunggu sampai pet dipasang kembali oleh automation pemiliknya
-					task.wait(0.5)
-				else
-					if cdLive[uuid] == nil then seedCd(uuid) end
-					local cd = cdLive[uuid]
-					local curPos = placePos()
-					local pickupDelay = tonumber(CFG.pnpV2PickupDelay) or 0
-					if curPos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) >= pickupDelay then
-						if pickupDelay > 0 then task.wait(pickupDelay) end
-						if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-						-- Pastikan tidak ada pergantian pet yang baru dimulai tepat sebelum unequip
-						if not isPnpYielding() then
-							pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-							if (CFG.pnpV2EquipDelay or 0) > 0 then task.wait(CFG.pnpV2EquipDelay) end
-							pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(curPos)) end)
-							cdLive[uuid] = nil
-							lastPlace[uuid] = os.clock()
-						end
-					end
-					task.wait(math.max(0.01, tonumber(CFG.pnpV2ScanInterval) or 0.05))
-				end
+			local stillTarget = false
+			for _, p in ipairs(targetPets()) do
+				if p.uuid == uuid then stillTarget = true; break end
 			end
-		end
+			if not stillTarget then break end
 
-		if petThreads[uuid] == myId then
-			petThreads[uuid] = nil
+			local cd = cdLive[uuid]
+			local pos = placePos()
+			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+				if (CFG.pnpV2PickupDelay or 0) > 0 then task.wait(CFG.pnpV2PickupDelay) end
+				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				task.wait(math.max(0.01, CFG.pnpV2EquipDelay or 0.03))
+				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
+				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+				lastPlace[uuid] = os.clock()
+			end
+			task.wait(math.max(0.02, tonumber(CFG.pnpV2ScanInterval) or 0.05))
 		end
+		petThreads[uuid] = nil
 	end
 
 	local function pnpLoop()
 		ctx.state.pnpV2Id = (ctx.state.pnpV2Id or 0) + 1
 		local myId = ctx.state.pnpV2Id
-		table.clear(petThreads)
-		table.clear(cdLive)
-		table.clear(lastPlace)
 		ctx.elevate()
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
-			if isPnpYielding() then
-				setStatus("PNP V2: mengalah (pergantian pet aktif)")
-				task.wait(0.5)
+			local pets = targetPets()
+			if #pets == 0 then
+				setStatus("PNP V2: tidak ada pet target (equip pet dulu)")
 			else
-				local pets = targetPets()
-				if #pets == 0 then
-					setStatus("PNP V2: tidak ada pet target (equip pet dulu)")
-				else
-					for _, p in ipairs(pets) do
-						if petThreads[p.uuid] ~= myId then
-							petThreads[p.uuid] = myId
-							task.spawn(runPetThread, p.uuid, myId)
-						end
-					end
-					setStatus(("PNP V2 (event-driven): %d pet"):format(#pets))
+				for _, p in ipairs(pets) do
+					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
 				end
-				task.wait(1)
+				setStatus(("PNP V2 (event-driven): %d pet"):format(#pets))
 			end
+			task.wait(1)
 		end
 	end
 
-	function ctx.startPnpV2()
-		task.spawn(pnpLoop)
-	end
-
-	function ctx.stopPnpV2()
-		ctx.state.pnpV2Id = (ctx.state.pnpV2Id or 0) + 1
-		table.clear(petThreads)
-		table.clear(cdLive)
-		table.clear(lastPlace)
-	end
+	function ctx.startPnpV2() task.spawn(pnpLoop) end
+	function ctx.stopPnpV2() ctx.state.pnpV2Id = (ctx.state.pnpV2Id or 0) + 1 end
 end
 ]=],
 	["modules/shop/automation_merchant.lua"] = [=[

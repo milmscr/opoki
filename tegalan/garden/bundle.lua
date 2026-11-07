@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-10-24T03:19:18.052Z
+-- 43 modul, di-generate 2026-11-07T15:05:35.154Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -211,6 +211,11 @@ return function(ctx)
 		ctx.log("Auto-resume: Auto Favourite ON.")
 	end
 
+	if CFG.autoUnfavoritePets and ctx.startAutoUnfavorite then
+		ctx.startAutoUnfavorite()
+		ctx.log("Auto-resume: Auto Unfavourite Pets ON.")
+	end
+
 	-- auto-resume Growth kalau sebelumnya aktif
 	if CFG.growthEnabled and ctx.startGrowth then
 		task.wait(2.0)
@@ -349,7 +354,7 @@ return function(ctx)
 		sellSpecialWeight   = 10,  -- 0=off
 		sellMode   = "Cycle",      -- Cycle | Backpack
 		sellStyle  = "All at Once",
-		sellEveryNCycles = 1,
+		sellEveryNCycles = 2,
 		sellWhenReach    = 100,    -- jual kalau backpack pet >= ini
 		sellTeamDelay    = 5.5,    -- detik tunggu abis swap team sebelum jual
 		autoBoostBeforeSell = false,
@@ -361,18 +366,22 @@ return function(ctx)
 		hatchTeamUnequipDelay = 1,
 		hatchSellEquipDelay   = 0,
 		hatchSellUnequipDelay = 1,
-		hatchSellList         = {}, -- { [petName] = { kg = 3, action = "SELL"|"KEEP" } }
+		hatchSellList         = {}, -- { [petName] = { kg = 7, action = "SELL"|"KEEP" } }
 		autoUnfavoritePets    = false,
 		unfavoritePetTypes    = {},
+		unfavoriteWeightFilter = 0,
+		unfavoriteAgeFilter    = 0,
 		tradeMethod           = "ticket", -- "ticket" | "gift"
 
 		-- Automation Accept
 		acceptGifts   = false,
 		acceptTrades  = false,
 
-		-- Automation Favourite Pets (placeholder)
+		-- Automation Favourite Pets
 		autoFavorite      = false,
 		favoritePetTypes  = {},
+		favoriteWeightFilter = 0,
+		favoriteAgeFilter    = 0,
 
 		-- PNP (Pick & Place) pet
 		pnpPetTypes = {},     -- (lama) filter per-tipe; kosong = semua equipped
@@ -388,7 +397,9 @@ return function(ctx)
 		pnpV2EquipDelay  = 0.03,
 		pnpV2ScanInterval = 0.05,
 		pnpV2Enabled     = false,
-		espEnabled  = false, -- label melayang (ESP) pet+egg di dunia
+		espEnabled    = false, -- master / legacy
+		espEggEnabled = false, -- label melayang (ESP) egg di dunia (tanpa box)
+		espPetEnabled = false, -- label melayang (ESP) pet di dunia (tanpa box)
 		espInvEnabled = false, -- ESP base weight di tiap slot pet inventory
 		espInvMode  = "age",   -- tampilan ESP inv: "age" (base+age) / "max" (base+max@500)
 		noclipEnabled    = false, -- Player: tembus tembok
@@ -557,6 +568,42 @@ return function(ctx)
 		elephantTargetWeight = 5.5,
 		elephantMaxPets     = 2,
 		elephantEnabled     = false,
+		-- Node Hub AUTO KG teams & thresholds
+		elephantNightmareTeam = {},
+		elephant100AgeTeam    = {},
+		elephantXpTeam        = {},
+		gbxpPetUuids          = {}, -- Target Pets for GBXP (non-favorite only)
+		elephantEquipAge      = 40,
+		elephantUnequipAge    = 0,
+		elephantKgMin         = -60.5,
+		elephantKgMax         = 60.5,
+		nightmareEquipAge     = 0,
+		nightmareUnequipAge   = 0,
+		nightmareKgMin        = 0,
+		nightmareKgMax        = 0,
+		age100EquipAge        = 0,
+		age100UnequipAge      = 0,
+		age100KgMin           = 0,
+		age100KgMax           = 0,
+		xpEquipAge            = 0,
+		xpUnequipAge          = 50,
+		xpKgMin               = 0,
+		xpKgMax               = 0,
+		gbxpEquipAge          = 0,
+		gbxpUnequipAge        = 100,
+		gbxpKgMin             = 0,
+		gbxpKgMax             = 0,
+		gbxpMaxEquip          = 2,
+
+		-- Node Hub AUTO MUT+LVL teams & settings
+		mut500AgeTeam         = {},
+		mutXpTeam             = {},
+		mutGbxpPets           = {},
+		mutationListMode      = "machine",
+		mutationUmurReq       = 50,
+		mutationSelected      = "Rainbow",
+		mutationAutoShardCleaner = false,
+		mutationPetTeamBeforeClaim = "+8",
 		-- Elephant V2: swap gajah keluar-masuk saat target hit level 40 (barengan PNP)
 		elephantV2Team      = {},   -- sumber pet Switch (team standby di garden)
 		elephantV2Types     = {},   -- tipe pet target yg dipantau levelnya
@@ -674,7 +721,7 @@ return function(ctx)
 			CFG.sellSpecialWeight   = tonumber(st.sellSpecialWeight) or 10
 			CFG.sellMode   = st.sellMode or "Cycle"
 			CFG.sellStyle  = st.sellStyle or "All at Once"
-			CFG.sellEveryNCycles = tonumber(st.sellEveryNCycles) or 1
+			CFG.sellEveryNCycles = tonumber(st.sellEveryNCycles) or 2
 			CFG.sellWhenReach    = tonumber(st.sellWhenReach) or 100
 			CFG.sellTeamDelay    = tonumber(st.sellTeamDelay) or 5.5
 			CFG.autoBoostBeforeSell = st.autoBoostBeforeSell or false
@@ -689,11 +736,15 @@ return function(ctx)
 			CFG.hatchSellList         = migratePetSet(st.hatchSellList)
 			CFG.autoUnfavoritePets    = st.autoUnfavoritePets or false
 			CFG.unfavoritePetTypes    = migratePetSet(st.unfavoritePetTypes)
+			CFG.unfavoriteWeightFilter = tonumber(st.unfavoriteWeightFilter) or 0
+			CFG.unfavoriteAgeFilter    = tonumber(st.unfavoriteAgeFilter) or 0
 			CFG.tradeMethod           = st.tradeMethod or "ticket"
 			CFG.acceptGifts    = st.acceptGifts or false
 			CFG.acceptTrades   = st.acceptTrades or false
 			CFG.autoFavorite   = st.autoFavorite or false
 			CFG.favoritePetTypes = migratePetSet(st.favoritePetTypes)
+			CFG.favoriteWeightFilter = tonumber(st.favoriteWeightFilter) or 0
+			CFG.favoriteAgeFilter    = tonumber(st.favoriteAgeFilter) or 0
 			CFG.pnpPetTypes = (type(st.pnpPetTypes) == "table") and st.pnpPetTypes or {}
 			CFG.pnpUuids    = (type(st.pnpUuids) == "table") and st.pnpUuids or {}
 			CFG.pickupDelay = tonumber(st.pickupDelay) or 0.3
@@ -705,7 +756,9 @@ return function(ctx)
 			CFG.pnpV2EquipDelay  = tonumber(st.pnpV2EquipDelay) or 0.03
 			CFG.pnpV2ScanInterval = tonumber(st.pnpV2ScanInterval) or 0.05
 			CFG.pnpV2Enabled     = st.pnpV2Enabled or false
-			CFG.espEnabled = st.espEnabled or false
+			CFG.espEnabled    = st.espEnabled or false
+			CFG.espEggEnabled = st.espEggEnabled or false
+			CFG.espPetEnabled = st.espPetEnabled or false
 			CFG.espInvEnabled = st.espInvEnabled or false
 			CFG.espInvMode = st.espInvMode or "age"
 			CFG.noclipEnabled = st.noclipEnabled or false
@@ -860,6 +913,42 @@ return function(ctx)
 			CFG.elephantV2Level     = tonumber(st.elephantV2Level) or 40
 			CFG.elephantV2Interval  = tonumber(st.elephantV2Interval) or 0.1
 			CFG.elephantV2Enabled   = st.elephantV2Enabled or false
+
+			-- Node Hub AUTO KG & AUTO MUT+LVL fields
+			CFG.elephantNightmareTeam = (type(st.elephantNightmareTeam) == "table") and st.elephantNightmareTeam or {}
+			CFG.elephant100AgeTeam    = (type(st.elephant100AgeTeam) == "table") and st.elephant100AgeTeam or {}
+			CFG.elephantXpTeam        = (type(st.elephantXpTeam) == "table") and st.elephantXpTeam or {}
+			CFG.gbxpPetUuids          = (type(st.gbxpPetUuids) == "table") and st.gbxpPetUuids or {}
+			CFG.elephantEquipAge      = tonumber(st.elephantEquipAge) or 40
+			CFG.elephantUnequipAge    = tonumber(st.elephantUnequipAge) or 0
+			CFG.elephantKgMin         = tonumber(st.elephantKgMin) or -60.5
+			CFG.elephantKgMax         = tonumber(st.elephantKgMax) or 60.5
+			CFG.nightmareEquipAge     = tonumber(st.nightmareEquipAge) or 0
+			CFG.nightmareUnequipAge   = tonumber(st.nightmareUnequipAge) or 0
+			CFG.nightmareKgMin        = tonumber(st.nightmareKgMin) or 0
+			CFG.nightmareKgMax        = tonumber(st.nightmareKgMax) or 0
+			CFG.age100EquipAge        = tonumber(st.age100EquipAge) or 0
+			CFG.age100UnequipAge      = tonumber(st.age100UnequipAge) or 0
+			CFG.age100KgMin           = tonumber(st.age100KgMin) or 0
+			CFG.age100KgMax           = tonumber(st.age100KgMax) or 0
+			CFG.xpEquipAge            = tonumber(st.xpEquipAge) or 0
+			CFG.xpUnequipAge          = tonumber(st.xpUnequipAge) or 50
+			CFG.xpKgMin               = tonumber(st.xpKgMin) or 0
+			CFG.xpKgMax               = tonumber(st.xpKgMax) or 0
+			CFG.gbxpEquipAge          = tonumber(st.gbxpEquipAge) or 0
+			CFG.gbxpUnequipAge        = tonumber(st.gbxpUnequipAge) or 100
+			CFG.gbxpKgMin             = tonumber(st.gbxpKgMin) or 0
+			CFG.gbxpKgMax             = tonumber(st.gbxpKgMax) or 0
+			CFG.gbxpMaxEquip          = tonumber(st.gbxpMaxEquip) or 2
+
+			CFG.mut500AgeTeam         = (type(st.mut500AgeTeam) == "table") and st.mut500AgeTeam or {}
+			CFG.mutXpTeam             = (type(st.mutXpTeam) == "table") and st.mutXpTeam or {}
+			CFG.mutGbxpPets           = (type(st.mutGbxpPets) == "table") and st.mutGbxpPets or {}
+			CFG.mutationListMode      = st.mutationListMode or "machine"
+			CFG.mutationUmurReq       = tonumber(st.mutationUmurReq) or 50
+			CFG.mutationSelected      = st.mutationSelected or "Rainbow"
+			CFG.mutationAutoShardCleaner = st.mutationAutoShardCleaner or false
+			CFG.mutationPetTeamBeforeClaim = st.mutationPetTeamBeforeClaim or "+8"
 
 			CFG.beanstalkPlantEnabled   = st.beanstalkPlantEnabled or false
 			CFG.beanstalkCollectEnabled = st.beanstalkCollectEnabled or false
@@ -3165,6 +3254,125 @@ return function(ctx)
 		task.spawn(favLoop)
 	end
 	function ctx.stopFavorite() ctx.state.favId = (ctx.state.favId or 0) + 1 end
+
+	----------------------------------------------------------------- PET FAVORITE / UNFAVORITE
+	local FavoriteItemRemote = (ctx.deps and ctx.deps.FavoriteItem) or (RS:FindFirstChild("GameEvents") and RS.GameEvents:FindFirstChild("Favorite_Item"))
+	local Favorite_Item_BE = RS:FindFirstChild("GameEvents") and RS.GameEvents:FindFirstChild("Favorite_Item_BE")
+	local DataService = (ctx.deps and ctx.deps.DataService)
+
+	local function petPassesFavFilter(pt, pd, isFavAction)
+		local typeSet = isFavAction and CFG.favoritePetTypes or CFG.unfavoritePetTypes
+		-- tipe: apabila KOSONG maka SEMUA type kena!
+		if typeSet and next(typeSet) then
+			local matchType = (ctx.petMatchesType and ctx.petMatchesType(typeSet, pt, pd)) or typeSet[pt]
+			if not matchType then return false end
+		end
+
+		local age = pd.Level or 0
+		local w = (pd.BaseWeight or 0) * (1 + 0.1 * age)
+
+		-- weight filter (+6 = min 6kg, -6 = max 6kg, 0 = off)
+		local wFilter = isFavAction and CFG.favoriteWeightFilter or CFG.unfavoriteWeightFilter
+		local wf = tonumber(wFilter) or 0
+		if wf > 0 and w < wf then return false end
+		if wf < 0 and w > -wf then return false end
+
+		-- age filter (+50 = min age 50, -50 = max age 50, 0 = off)
+		local aFilter = isFavAction and CFG.favoriteAgeFilter or CFG.unfavoriteAgeFilter
+		local af = tonumber(aFilter) or 0
+		if af > 0 and age < af then return false end
+		if af < 0 and age > -af then return false end
+
+		return true
+	end
+
+	local function findPetTool(uuid)
+		local bp = LP:FindFirstChildOfClass("Backpack")
+		if bp then for _, t in ipairs(bp:GetChildren()) do
+			if t:IsA("Tool") and t:GetAttribute("PET_UUID") == uuid then return t end
+		end end
+		if LP.Character then for _, t in ipairs(LP.Character:GetChildren()) do
+			if t:IsA("Tool") and t:GetAttribute("PET_UUID") == uuid then return t end
+		end end
+		return nil
+	end
+
+	local function petFavLoop()
+		ctx.state.petFavId = (ctx.state.petFavId or 0) + 1
+		local myId = ctx.state.petFavId
+		while CFG.autoFavorite and ctx.alive() and ctx.state.petFavId == myId do
+			local ok, d = pcall(function()
+				local ds = DataService or (RS.Modules and RS.Modules:FindFirstChild("DataService") and require(RS.Modules.DataService))
+				return ds and ds:GetData()
+			end)
+			local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+			local re = FavoriteItemRemote or (RS.GameEvents and RS.GameEvents:FindFirstChild("Favorite_Item"))
+			local be = Favorite_Item_BE or (RS.GameEvents and RS.GameEvents:FindFirstChild("Favorite_Item_BE"))
+			if inv and re then
+				for uuid, v in pairs(inv) do
+					if not CFG.autoFavorite or ctx.state.petFavId ~= myId then break end
+					local pd = v.PetData or {}
+					if not pd.IsFavorite then
+						local pt = v.PetType or ""
+						if petPassesFavFilter(pt, pd, true) then
+							local tool = findPetTool(uuid)
+							if tool then
+								pcall(function() re:FireServer(tool) end)
+								if be then pcall(function() be:Fire(tool) end) end
+								task.wait(0.08)
+							end
+						end
+					end
+				end
+			end
+			task.wait(1.5)
+		end
+	end
+
+	local function petUnfavLoop()
+		ctx.state.petUnfavId = (ctx.state.petUnfavId or 0) + 1
+		local myId = ctx.state.petUnfavId
+		while CFG.autoUnfavoritePets and ctx.alive() and ctx.state.petUnfavId == myId do
+			local ok, d = pcall(function()
+				local ds = DataService or (RS.Modules and RS.Modules:FindFirstChild("DataService") and require(RS.Modules.DataService))
+				return ds and ds:GetData()
+			end)
+			local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+			local re = FavoriteItemRemote or (RS.GameEvents and RS.GameEvents:FindFirstChild("Favorite_Item"))
+			local be = Favorite_Item_BE or (RS.GameEvents and RS.GameEvents:FindFirstChild("Favorite_Item_BE"))
+			if inv and re then
+				for uuid, v in pairs(inv) do
+					if not CFG.autoUnfavoritePets or ctx.state.petUnfavId ~= myId then break end
+					local pd = v.PetData or {}
+					if pd.IsFavorite then
+						local pt = v.PetType or ""
+						if petPassesFavFilter(pt, pd, false) then
+							local tool = findPetTool(uuid)
+							if tool then
+								pcall(function() re:FireServer(tool) end)
+								if be then pcall(function() be:Fire(tool) end) end
+								task.wait(0.08)
+							end
+						end
+					end
+				end
+			end
+			task.wait(1.5)
+		end
+	end
+
+	function ctx.startAutoFavorite()
+		task.spawn(petFavLoop)
+	end
+	function ctx.stopAutoFavorite()
+		ctx.state.petFavId = (ctx.state.petFavId or 0) + 1
+	end
+	function ctx.startAutoUnfavorite()
+		task.spawn(petUnfavLoop)
+	end
+	function ctx.stopAutoUnfavorite()
+		ctx.state.petUnfavId = (ctx.state.petUnfavId or 0) + 1
+	end
 end
 ]=],
 	["modules/farm/automation_plants.lua"] = [=[
@@ -4800,7 +5008,7 @@ return function(ctx)
 
 	-- filter disimpan pakai label "Pet - Egg"; cocokin pakai label yg sama.
 	local petEggLabel = (ctx.reg and ctx.reg.petEggLabel) or (ctx.petEggLabel) or function(p) return p end
-	local petBaseName = (ctx.reg and ctx.reg.petBaseName) or (ctx.petBaseName) or function(p) return tostring(p):match("^(.-)%s*-%s*") or tostring(p) end
+	local petBaseName = (ctx.reg and ctx.reg.petBaseName) or (ctx.petBaseName) or function(p) return tostring(p):match("^(.-)%s*%-") or tostring(p) end
 
 	-- Helper pencocokan pet ke Sell & Bronto Config list
 	local function findRule(petType, petData)
@@ -4847,8 +5055,8 @@ return function(ctx)
 			if rule.special == true then
 				return false -- Special pet (bintang aktif) mutlak disimpan (KEEP)
 			end
-			local targetKg = tonumber(rule.kg) or 0
-			if w >= targetKg then
+			local targetKg = tonumber(rule.kg) or 7.0
+			if targetKg > 0 and w >= targetKg then
 				return false -- Weight >= KG -> KEEP (pet aman, tetap disimpan, dan masuk ke proses Bronto)
 			else
 				-- Weight < KG -> mengikuti pengaturan tombol KEEP / SELL
@@ -5209,13 +5417,16 @@ return function(ctx)
 				if CFG.brontoSkipSpecial then return "skip" end
 				return "bronto"
 			end
-			local targetKg = tonumber(rule.kg) or 0
-			if w >= targetKg then
+			local targetKg = tonumber(rule.kg) or 7.0
+			if targetKg > 0 and w >= targetKg then
 				if CFG.brontoSkipSpecial then return "skip" end
 				return "bronto"
 			else
 				return "normal"
 			end
+		elseif CFG.hatchSellList and next(CFG.hatchSellList) then
+			-- Pet tidak ada di Sell & Bronto List tapi user mengkonfigurasi list -> default normal (bukan bronto)
+			return "normal"
 		end
 
 		-- 2) Fallback filter lama jika ada
@@ -5602,20 +5813,22 @@ return function(ctx)
 		local rule = findRule(petType)
 		if rule then
 			if rule.special == true then return true end
-			local targetKg = tonumber(rule.kg) or 0
-			return (tonumber(w) or 0) >= targetKg
+			local targetKg = tonumber(rule.kg) or 7.0
+			return targetKg > 0 and (tonumber(w) or 0) >= targetKg
 		end
 		local key = petEggLabel(petType)
-		if (CFG.brontoSpecialPets or {})[key] ~= true then return false end
-		if (CFG.brontoSpecialWeight or 0) > 0 and (w or 0) <= CFG.brontoSpecialWeight then return false end
-		return true
+		if (CFG.brontoSpecialPets or {})[key] == true then
+			if (CFG.brontoSpecialWeight or 0) > 0 and (w or 0) <= CFG.brontoSpecialWeight then return false end
+			return true
+		end
+		return false
 	end
-	-- akumulasi pet ke-hatch: Special vs Heavy (>= 5 kg). Simpan list semua bobot per petType.
-	local function trackHatch(petType, dispW, special)
+	-- akumulasi pet ke-hatch: Special vs Bronto. Simpan list semua bobot per petType.
+	local function trackHatch(petType, dispW, special, isBronto)
 		ctx.state.hatchTiers = ctx.state.hatchTiers or {}
 		dispW = tonumber(dispW) or 0
-		local category = special and "Special" or (dispW >= 5 and "Heavy" or nil)
-		if not category then return end -- <5kg non-special: skip
+		local category = special and "Special" or (isBronto and "Bronto" or nil)
+		if not category then return end -- pet biasa non-special dan bukan bronto: skip agar tidak salah masuk laporan bronto!
 
 		local bucket = ctx.state.hatchTiers[category]
 		if not bucket then bucket = {}; ctx.state.hatchTiers[category] = bucket end
@@ -5626,32 +5839,58 @@ return function(ctx)
 	end
 	ctx.hatchIsBrontoSpecial = isBrontoSpecial
 
-	-- Recovery stat DIHITUNG dari team yg dipilih (formula game, bukan empiris).
-	-- Per pet: value = clamp(Base + Scale*scaledLevel, 0, Max). scaledLevel diminishing
-	-- di atas 100. Total di-cap 50% (cap per egg). Koi @ Hatch team, Seal @ Sell team.
-	local function scaledLevel(lv)
-		lv = lv or 0
-		if lv <= 100 then return lv
-		elseif lv <= 120 then return (lv - 100) * 0.25 + 100
-		else return (lv - 120) * 0.1 + 105 end
+	-- Helper untuk menghitung Recovery Passive (Koi @ Hatch Team, Seal @ Sell Team)
+	local function getPetWeight(pd)
+		if not pd then return 0 end
+		local bw = tonumber(pd.BaseWeight) or 0
+		local lv = tonumber(pd.Level) or 0
+		return bw * (1 + 0.1 * lv)
 	end
-	local function passivePct(teamSet, typeMatch, base, scale, maxPer)
+
+	local function calcKoiPassive(v)
+		local pd = v and v.PetData or {}
+		-- Formula aktual Grow A Garden untuk Fish of Fortune (Koi):
+		-- Chance = (0.22 * Weight + 3)%
+		local w = getPetWeight(pd)
+		return 0.22 * w + 3
+	end
+
+	local function calcSealPassive(v)
+		local pd = v and v.PetData or {}
+		-- Formula aktual Grow A Garden untuk Seal the Deal (Seal):
+		-- Chance = (0.22 * Weight + 2.5)%, cap per pet 8%
+		local w = getPetWeight(pd)
+		return math.min(8, 0.22 * w + 2.5)
+	end
+
+	local function calculatePassivePercent(teamSet, typeMatch, fallbackCalc)
 		local inv = inventory()
 		local n, total = 0, 0
+		local PU = ctx.deps and ctx.deps.PU
 		for u in pairs(teamSet or {}) do
 			local v = inv[u]
 			if v and tostring(v.PetType):find(typeMatch) then
 				n = n + 1
-				local val = base + scale * scaledLevel((v.PetData or {}).Level or 0)
-				total = total + math.clamp(val, 0, maxPer) -- per-pet asli (Max 10), total ga di-cap
+				local val = nil
+				if PU then
+					pcall(function()
+						if PU.GetPassiveValue then val = PU:GetPassiveValue(v, typeMatch)
+						elseif PU.GetPassiveChance then val = PU:GetPassiveChance(v, typeMatch) end
+					end)
+				end
+				if not tonumber(val) or tonumber(val) <= 0 then
+					val = fallbackCalc(v)
+				end
+				total = total + (tonumber(val) or 0)
 			end
 		end
 		return n, total
 	end
-	-- Koi (Fish of Fortune): Base1 Scale0.22 Max10. Seal (Seal the Deal): Base1 Scale0.05 Max10.
+
+	-- Recovery stat DIHITUNG dari team yg dipilih (formula game akurat, bukan cap hardcode).
 	function ctx.getRecoveryStat()
-		local kn, kp = passivePct(CFG.hatchHatchTeam, "Koi", 1, 0.22, 10)
-		local sn, sp = passivePct(CFG.hatchSellTeam, "Seal", 1, 0.05, 10)
+		local kn, kp = calculatePassivePercent(CFG.hatchHatchTeam, "Koi", calcKoiPassive)
+		local sn, sp = calculatePassivePercent(CFG.hatchSellTeam, "Seal", calcSealPassive)
 		return {
 			koiCount = kn, koiPct = kp,
 			sealCount = sn, sealPct = sp,
@@ -5701,13 +5940,13 @@ return function(ctx)
 			huntLines[#huntLines + 1] = ("> • **%s** `x%d` (%s)"):format(pt, t.n, rng)
 		end
 
-		-- 2. Heavy / Huge-Colossal Pets (daftar bobot per pet)
-		local heavyBucket = tiers["Heavy"] or {}
-		local heavyKeys = {}
-		for pt in pairs(heavyBucket) do heavyKeys[#heavyKeys + 1] = pt end
-		table.sort(heavyKeys)
-		for _, pt in ipairs(heavyKeys) do
-			local t = heavyBucket[pt]
+		-- 2. Bronto Hatched Pets (daftar bobot per pet)
+		local brontoBucket = tiers["Bronto"] or tiers["Heavy"] or {}
+		local brontoKeys = {}
+		for pt in pairs(brontoBucket) do brontoKeys[#brontoKeys + 1] = pt end
+		table.sort(brontoKeys)
+		for _, pt in ipairs(brontoKeys) do
+			local t = brontoBucket[pt]
 			totalPets = totalPets + t.n
 			local wStrs = {}
 			for _, w in ipairs(t.weights) do
@@ -5972,8 +6211,8 @@ return function(ctx)
 					local pt, w = eggPending(e)
 					if pt then
 						local isSpecial = isBrontoSpecial(pt, w)
-						trackHatch(pt, w, isSpecial)
 						if isSpecial then
+							trackHatch(pt, w, true, false)
 							task.spawn(function() sendHatchAlert(pt, CFG.hatchEggName or "Rare Egg", w, false) end)
 						end
 					end
@@ -6007,7 +6246,11 @@ return function(ctx)
 					end
 					local pt, w = eggPending(e)
 					-- pet ini di-hatch pakai Bronto team -> berat aktual +30% (buat tier Hunt)
-					if pt then trackHatch(pt, w * 1.3, isBrontoSpecial(pt, w)); task.spawn(function() sendHatchAlert(pt, CFG.hatchEggName or "Rare Egg", w) end) end
+					if pt then
+						local isSpecial = isBrontoSpecial(pt, w)
+						trackHatch(pt, w * 1.3, isSpecial, true)
+						task.spawn(function() sendHatchAlert(pt, CFG.hatchEggName or "Rare Egg", w, true) end)
+					end
 					pcall(function() EggRemote:FireServer("HatchPet", e) end)
 					ctx.state.hatchEggsHatched = (ctx.state.hatchEggsHatched or 0) + 1
 				end
@@ -6197,7 +6440,7 @@ return function(ctx)
 						pcall(function() c:Fire() end); fired = true
 					end
 				end
-				if fired then n += 1 end
+				if fired then n = n + 1 end
 			end
 		end
 		return n
@@ -6561,7 +6804,7 @@ return function(ctx)
 			if d and d.players then for i, pl in ipairs(d.players) do if pl == LP then myIdx = i end end end
 			local n = 0
 			if d and myIdx and d.offers and d.offers[myIdx] then
-				for _ in pairs(d.offers[myIdx].items or {}) do n += 1 end
+				for _ in pairs(d.offers[myIdx].items or {}) do n = n + 1 end
 			end
 			log(("Pet masuk ke offer: %d/%d"):format(n, #pets))
 			if n == 0 then
@@ -6841,7 +7084,7 @@ return function(ctx)
 				if ctx.refreshGiftStatus then ctx.refreshGiftStatus() end
 				local ok = isGift and doOneGift(target) or doOneTrade(target)
 				if ok then
-					ctx.state.completed += 1
+					ctx.state.completed = ctx.state.completed + 1
 					log(("%s sukses (%d/%d)"):format(isGift and "Gift" or "Trade", ctx.state.completed, totalLimit))
 					if ctx.notifyTrade then
 						local petLimit = isGift and (CFG.giftPetsPerBatch or 12) or CFG.petsPerTrade
@@ -7859,14 +8102,17 @@ return function(ctx)
 end
 ]=],
 	["modules/misc/esp_label.lua"] = [=[
---[[ esp.lua — label melayang (BillboardGui) di dunia 3D di atas tiap egg.
+--[[ esp_label.lua — label melayang (BillboardGui) di dunia 3D di atas tiap egg & pet.
      Egg: nama egg + ISI-nya (pet yang bakal menetas + berat) dari
           SaveSlots.AllSlots.<slot>.SavedObjects.<uuid>.Data (Type/BaseWeight),
           fallback sisa waktu hatch / READY.
-     Toggle: CFG.espEnabled. ]]
+     Pet: nama pet + berat KG + Level + mutasi.
+     Tampilan bersih floating 3D text tanpa box background (BackgroundTransparency = 1).
+     Toggle terpisah: CFG.espEggEnabled & CFG.espPetEnabled. ]]
 return function(ctx)
 	local RS = game:GetService("ReplicatedStorage")
 	local LP = ctx.LP
+	local CFG = ctx.CFG
 	local DataService = ctx.deps.DataService
 
 	-- Game nampilin berat = BaseWeight * 1.1 (bukan raw BaseWeight).
@@ -7895,7 +8141,7 @@ return function(ctx)
 		local bb = Instance.new("BillboardGui")
 		bb.Name = "esp_" .. key
 		bb.Adornee = adornee
-		bb.Size = UDim2.fromOffset(260, 72)
+		bb.Size = UDim2.fromOffset(260, 60)
 		bb.StudsOffset = Vector3.new(0, offset or 2.8, 0)
 		bb.AlwaysOnTop = true
 		bb.MaxDistance = 600
@@ -7903,44 +8149,20 @@ return function(ctx)
 		bb.ClipsDescendants = false
 		bb.Parent = ensureFolder()
 
-		-- Background card (translucent dark pink)
-		local bg = Instance.new("Frame")
-		bg.Size = UDim2.new(1, 0, 1, 0)
-		bg.BackgroundColor3 = Color3.fromRGB(18, 6, 26)
-		bg.BackgroundTransparency = 0.22
-		bg.BorderSizePixel = 0
-		bg.Parent = bb
-		Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 10)
-		local bgStroke = Instance.new("UIStroke", bg)
-		bgStroke.Color = Color3.fromRGB(255, 55, 145)
-		bgStroke.Thickness = 1.4
-		bgStroke.Transparency = 0.3
-		bgStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
-		-- Top accent glow strip
-		local topBar = Instance.new("Frame")
-		topBar.Size = UDim2.new(0.7, 0, 0, 2)
-		topBar.Position = UDim2.new(0.15, 0, 0, 0)
-		topBar.BackgroundColor3 = Color3.fromRGB(255, 135, 205)
-		topBar.BackgroundTransparency = 0.1
-		topBar.BorderSizePixel = 0
-		topBar.ZIndex = 3
-		topBar.Parent = bg
-		Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 2)
-
+		-- Teks mengambang bersih tanpa kotak background
 		local lbl = Instance.new("TextLabel")
 		lbl.BackgroundTransparency = 1
-		lbl.Size = UDim2.new(1, -8, 1, 0)
-		lbl.Position = UDim2.fromOffset(4, 0)
+		lbl.Size = UDim2.new(1, 0, 1, 0)
+		lbl.Position = UDim2.fromOffset(0, 0)
 		lbl.Font = Enum.Font.FredokaOne
-		lbl.TextSize = 15
+		lbl.TextSize = 14
 		lbl.RichText = true
 		lbl.TextColor3 = Color3.new(1, 1, 1)
-		lbl.TextStrokeTransparency = 0.5
-		lbl.TextStrokeColor3 = Color3.fromRGB(120, 0, 60)
+		lbl.TextStrokeTransparency = 0
+		lbl.TextStrokeColor3 = Color3.fromRGB(15, 15, 20)
 		lbl.TextYAlignment = Enum.TextYAlignment.Center
-		lbl.ZIndex = 4
-		lbl.Parent = bg
+		lbl.TextXAlignment = Enum.TextXAlignment.Center
+		lbl.Parent = bb
 
 		local rec = { gui = bb, lbl = lbl }
 		billboards[key] = rec
@@ -7993,67 +8215,75 @@ return function(ctx)
 
 	local function update()
 		local seen = {}
+		local showEgg = CFG.espEggEnabled or (CFG.espEggEnabled == nil and CFG.espEnabled)
+		local showPet = CFG.espPetEnabled or (CFG.espPetEnabled == nil and CFG.espEnabled)
 
 		-- ===== EGG (nama + isi: pet + berat) =====
-		local farm; pcall(function() farm = require(RS.Modules.GetFarm)(LP) end)
-		if farm then
-			for _, e in ipairs(farm:GetDescendants()) do
-				if e:IsA("Model") and e.Name == "PetEgg" and e:GetAttribute("OWNER") == LP.Name then
-					local adornee = e:FindFirstChild("PetEgg") or partOf(e)
-					if adornee then
-						local uuid = e:GetAttribute("OBJECT_UUID")
-						local key = "egg_" .. tostring(uuid or e:GetDebugId())
-						seen[key] = true
-						local rec = acquire(key, adornee, 3)
-						local data = eggDataOf(uuid)
-						local lines = { ("<font color='#FF87CD'><b>🥚 %s</b></font>"):format(eggNameFallback(e)) }
-						if data and data.Type then
-							lines[#lines + 1] = ("<font color='#FF3791'>%s</font>"):format(tostring(data.Type))
-							local w = tonumber(data.BaseWeight)
-							if w then lines[#lines + 1] = ("<font color='#FFD7F0'>%.2f KG</font>"):format(w * WEIGHT_MULT) end
+		if showEgg then
+			local farm; pcall(function() farm = require(RS.Modules.GetFarm)(LP) end)
+			if farm then
+				for _, e in ipairs(farm:GetDescendants()) do
+					if e:IsA("Model") and e.Name == "PetEgg" and e:GetAttribute("OWNER") == LP.Name then
+						local adornee = e:FindFirstChild("PetEgg") or partOf(e)
+						if adornee then
+							local uuid = e:GetAttribute("OBJECT_UUID")
+							local key = "egg_" .. tostring(uuid or e:GetDebugId())
+							seen[key] = true
+							local rec = acquire(key, adornee, 3)
+							local data = eggDataOf(uuid)
+							local lines = { ("<font color='#FF87CD'><b>🥚 %s</b></font>"):format(eggNameFallback(e)) }
+							if data and data.Type then
+								lines[#lines + 1] = ("<font color='#FF459E'><b>%s</b></font>"):format(tostring(data.Type))
+								local w = tonumber(data.BaseWeight)
+								if w then lines[#lines + 1] = ("<font color='#FFD7F0'>%.2f KG</font>"):format(w * WEIGHT_MULT) end
+							end
+							local t = tonumber(e:GetAttribute("TimeToHatch")) or (data and tonumber(data.TimeToHatch)) or 0
+							if t > 0 then
+								lines[#lines + 1] = ("<font color='#FFB4CD'>⏱ %s</font>"):format(fmtTime(t))
+							elseif not (data and data.Type) then
+								lines[#lines + 1] = "<font color='#6EF5B9'><b>READY</b></font>"
+							end
+							rec.lbl.Text = table.concat(lines, "\n")
 						end
-						local t = tonumber(e:GetAttribute("TimeToHatch")) or (data and tonumber(data.TimeToHatch)) or 0
-						if t > 0 then
-							lines[#lines + 1] = ("<font color='#FFB4CD'>⏱ %s</font>"):format(fmtTime(t))
-						elseif not (data and data.Type) then
-							lines[#lines + 1] = "<font color='#6EF5B9'><b>READY</b></font>"
-						end
-						rec.lbl.Text = table.concat(lines, "\n")
 					end
 				end
 			end
 		end
 
 		-- ===== PET (nama + berat + lv) =====
-		local okData, d = pcall(function() return DataService:GetData() end)
-		local inv = okData and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
-		local pp = workspace:FindFirstChild("PetsPhysical")
-		if pp then
-			for _, mover in ipairs(pp:GetChildren()) do
-				for _, petModel in ipairs(mover:GetChildren()) do
-					if petModel:IsA("Model") then
-						local uuid = petModel.Name
-						local pData = inv[uuid]
-						if pData then
-							local adornee = partOf(petModel)
-							if adornee then
-								local key = "pet_" .. tostring(uuid)
-								seen[key] = true
-								local rec = acquire(key, adornee, 2.5)
-								local pt = pData.PetType or "Pet"
-								local pd = pData.PetData or {}
-								local bw = tonumber(pd.BaseWeight)
-								local lv = tonumber(pd.Level) or 0
-								local mut = pd.MutationType
+		if showPet then
+			local okData, d = pcall(function() return DataService:GetData() end)
+			local inv = okData and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+			local pp = workspace:FindFirstChild("PetsPhysical")
+			if pp then
+				for _, mover in ipairs(pp:GetChildren()) do
+					for _, petModel in ipairs(mover:GetChildren()) do
+						if petModel:IsA("Model") then
+							local uuid = petModel.Name
+							local pData = inv[uuid]
+							if pData then
+								local adornee = partOf(petModel)
+								if adornee then
+									local key = "pet_" .. tostring(uuid)
+									seen[key] = true
+									local rec = acquire(key, adornee, 2.5)
+									local pt = pData.PetType or "Pet"
+									local pd = pData.PetData or {}
+									local bw = tonumber(pd.BaseWeight)
+									local lv = tonumber(pd.Level) or 0
+									local mut = pd.MutationType
 
-								local lines = { ("<font color='#FF5FA0'><b>🐾 %s</b></font>"):format(tostring(pt)) }
-								if bw then
-									lines[#lines + 1] = ("<font color='#FFD7F0'>%.2f KG</font> <font color='#FF87CD'>[Lv.%d]</font>"):format(bw * WEIGHT_MULT, lv)
+									local lines = { ("<font color='#FF87CD'><b>🐾 %s</b></font>"):format(tostring(pt)) }
+									if bw then
+										lines[#lines + 1] = ("<font color='#FFD7F0'>%.2f KG</font> <font color='#FFB4CD'>[Lv.%d]</font>"):format(bw * WEIGHT_MULT, lv)
+									end
+									if mut and mut ~= "" and mut ~= "Normal" and mut ~= "m" then
+										local mutDisplay = mut
+										if ctx.reg and ctx.reg.mutDisplay then mutDisplay = ctx.reg.mutDisplay(mut) end
+										lines[#lines + 1] = ("<font color='#6EF5B9'>✨ %s</font>"):format(tostring(mutDisplay))
+									end
+									rec.lbl.Text = table.concat(lines, "\n")
 								end
-								if mut and mut ~= "" and mut ~= "Normal" and mut ~= "m" then
-									lines[#lines + 1] = ("<font color='#6EF5B9'>✨ %s</font>"):format(tostring(mut))
-								end
-								rec.lbl.Text = table.concat(lines, "\n")
 							end
 						end
 					end
@@ -8077,7 +8307,7 @@ return function(ctx)
 		loopId = loopId + 1
 		local my = loopId
 		task.spawn(function()
-			while ctx.alive() and ctx.CFG.espEnabled and loopId == my do
+			while ctx.alive() and (CFG.espEggEnabled or CFG.espPetEnabled or CFG.espEnabled) and loopId == my do
 				pcall(update)
 				task.wait(0.5)
 			end
@@ -8086,8 +8316,21 @@ return function(ctx)
 	end
 
 	function ctx.stopEsp()
-		loopId = loopId + 1
-		clearAll()
+		if not (CFG.espEggEnabled or CFG.espPetEnabled or CFG.espEnabled) then
+			loopId = loopId + 1
+			clearAll()
+		else
+			-- kalau salah satu masih on, cukup update untuk bersihkan yang dimatikan
+			pcall(update)
+		end
+	end
+
+	function ctx.refreshEsp()
+		if CFG.espEggEnabled or CFG.espPetEnabled or CFG.espEnabled then
+			ctx.startEsp()
+		else
+			ctx.stopEsp()
+		end
 	end
 end
 ]=],
@@ -8310,6 +8553,15 @@ return function(ctx)
 	local TimeHelper  = require(RS.Modules.TimeHelper)
 	local PetMutationMachineService_RE = RS:WaitForChild("GameEvents").PetMutationMachineService_RE
 
+	local function findShard()
+		for _, where in ipairs({ LP.Character, LP:FindFirstChildOfClass("Backpack") }) do
+			if where then for _, t in ipairs(where:GetChildren()) do
+				if t:IsA("Tool") and (t:HasTag("PetShardTool") or tostring(t.Name):find("Cleansing Pet Shard")) then return t end
+			end end
+		end
+		return nil
+	end
+
 	local function farmCenter()
 		local GetFarm = require(RS.Modules.GetFarm)
 		local farm = GetFarm and GetFarm(LP)
@@ -8521,8 +8773,31 @@ return function(ctx)
 		local phoenixTeam = CFG.mutationPhoenixTeam or {}
 		local targetTypes = CFG.mutationTargetTypes or {}
 		local targetMutations = CFG.mutationTargetMutations or {}
-		local targetAge = CFG.mutationTargetAge or 50
+		if CFG.mutationSelected and CFG.mutationSelected ~= "" and not next(targetMutations) then
+			targetMutations = { [CFG.mutationSelected] = true }
+		end
+		local targetAge = tonumber(CFG.mutationUmurReq) or tonumber(CFG.mutationTargetAge) or 50
 		local delayClaim = CFG.mutationDelayAutoClaim or 0.5
+
+		local function isTargetCandidate(uuid, pt, pd)
+			-- Pet target WAJIB unfavorite! (Jika Favorite, langsung tolak)
+			if pd.IsFavorite then return false end
+
+			-- Jika pet target GBXP ditentukan di UI, HANYA pet terpilih yang boleh
+			local gbxpSet = (CFG.mutGbxpPets and next(CFG.mutGbxpPets) and CFG.mutGbxpPets)
+				or (CFG.gbxpPetUuids and next(CFG.gbxpPetUuids) and CFG.gbxpPetUuids)
+
+			if gbxpSet then
+				return gbxpSet[uuid] == true
+			end
+
+			-- Fallback: jika gbxp kosong, periksa kesesuaian targetTypes
+			if next(targetTypes) then
+				return matchesType(targetTypes, pt, pd)
+			end
+
+			return false
+		end
 
 		-- CATATAN: passing team ASLI (uuid ber-kurawal) ke ensureEquippedTeam. cleanUuid dipakai
 		-- HANYA buat matching di dalam fungsi; EquipPet butuh uuid format asli (dengan {}).
@@ -8602,6 +8877,58 @@ return function(ctx)
 				ctx.state.mutationPhase = "Matched! Lanjut next target..."
 			else
 				ctx.state.mutationPhase = "Non-target, lanjut..."
+				-- Auto Shard Cleaner jika aktif: bersihkan mutasi non-target
+				if CFG.mutationAutoShardCleaner then
+					ctx.state.mutationPhase = "Cleaning mutation (Shard)..."
+					local okC, dC = pcall(function() return DataService:GetData() end)
+					local cInv = okC and dC and dC.PetsData and dC.PetsData.PetInventory and dC.PetsData.PetInventory.Data or {}
+					local targetCleanseUuid
+					for u, v in pairs(cInv) do
+						local pd = v.PetData or {}
+						if not pd.IsFavorite and pd.MutationType == outcomeMutation and not preSnapshot[u] then
+							targetCleanseUuid = u
+							break
+						end
+					end
+					if not targetCleanseUuid then
+						for u, v in pairs(cInv) do
+							local pd = v.PetData or {}
+							if not pd.IsFavorite and pd.MutationType == outcomeMutation and isTargetCandidate(u, v.PetType, pd) then
+								targetCleanseUuid = u
+								break
+							end
+						end
+					end
+					if targetCleanseUuid then
+						local pos = getPos(targetCleanseUuid)
+						if pos then
+							pcall(function() PetsService:FireServer("EquipPet", targetCleanseUuid, CFrame.new(pos)) end)
+							task.wait(0.5)
+							local shard = findShard()
+							local pp = workspace:FindFirstChild("PetsPhysical")
+							local model
+							if pp then
+								for _, d in ipairs(pp:GetDescendants()) do
+									if d.Name == targetCleanseUuid then model = d; break end
+								end
+							end
+							if shard and model then
+								local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+								if hum then
+									pcall(function() hum:EquipTool(shard) end)
+									task.wait(0.3)
+									local PetShardService = RS:FindFirstChild("GameEvents") and RS.GameEvents:FindFirstChild("PetShardService_RE")
+									if PetShardService then
+										pcall(function() PetShardService:FireServer("ApplyShard", model) end)
+										task.wait(0.4)
+									end
+								end
+							end
+							pcall(function() PetsService:FireServer("UnequipPet", targetCleanseUuid) end)
+							task.wait(0.2)
+						end
+					end
+				end
 			end
 			return
 		end
@@ -8636,8 +8963,8 @@ return function(ctx)
 				local mut = pd.MutationType or "Normal"
 				local isFav = pd.IsFavorite or false
 
-				-- Hanya pet tipe target, dengan level >= targetAge, bukan favorite, dan belum memiliki mutasi target
-				if matchesType(targetTypes, pt, pd) and lvl >= targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
+				-- Hanya pet kandidat target (wajib unfavorite), level >= targetAge, dan belum memiliki mutasi target
+				if isTargetCandidate(uuid, pt, pd) and lvl >= targetAge and not hasTargetMutation(pd, targetMutations) then
 					candidateUuid = uuid
 					candidateType = pt
 					break
@@ -8723,7 +9050,7 @@ return function(ctx)
 				local mut = pd.MutationType or "Normal"
 				local isFav = pd.IsFavorite or false
 
-				if matchesType(targetTypes, pt, pd) and lvl < targetAge and not isFav and not hasTargetMutation(pd, targetMutations) then
+				if isTargetCandidate(uuid, pt, pd) and lvl < targetAge and not hasTargetMutation(pd, targetMutations) then
 					-- Prioritaskan level yang paling tinggi tapi masih di bawah targetAge agar cepat jadi!
 					if not levelLvl or lvl > levelLvl then
 						levelUuid = uuid
@@ -8750,7 +9077,7 @@ return function(ctx)
 			end
 
 			-- Jika sama sekali tidak ada pet kandidat
-			ctx.state.mutationPhase = "Idle (No Targets)"
+			ctx.state.mutationPhase = "IDLE — siap submit pet"
 		end
 	end
 
@@ -9414,27 +9741,28 @@ return function(ctx)
 				for uuid in pairs(pets) do
 					if not CFG.boostEnabled or ctx.state.boostId ~= myId then break end
 					-- Skip pet yang nggak aktif/placed di garden (boost ga guna)
-					if not isPetActive(uuid) then continue end
-					-- Cek state asli: boost apa yang masih aktif di pet ini
-					local active = petActiveTypes(uuid)
-					local tool = findToolForMissing(active)
-					if tool then
-						local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-						if hum then
-							-- pastikan item bener-bener dipegang sebelum ApplyBoost
-							local held
-							for _ = 1, 3 do
-								pcall(function() hum:EquipTool(tool) end)
-								task.wait(0.35)
-								held = LP.Character and LP.Character:FindFirstChildWhichIsA("Tool")
-								if held and held:HasTag("PetBoost") then break end
-								tool = findToolForMissing(active)
-								if not tool then break end
-							end
-							if held and held:HasTag("PetBoost") then
-								pcall(function() PetBoostService:FireServer("ApplyBoost", uuid) end)
-								setStatus(("Boost: %s -> #%s"):format(baseName(held.Name), uuid:sub(2, 5)))
-								task.wait(0.6)
+					if isPetActive(uuid) then
+						-- Cek state asli: boost apa yang masih aktif di pet ini
+						local active = petActiveTypes(uuid)
+						local tool = findToolForMissing(active)
+						if tool then
+							local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+							if hum then
+								-- pastikan item bener-bener dipegang sebelum ApplyBoost
+								local held
+								for _ = 1, 3 do
+									pcall(function() hum:EquipTool(tool) end)
+									task.wait(0.35)
+									held = LP.Character and LP.Character:FindFirstChildWhichIsA("Tool")
+									if held and held:HasTag("PetBoost") then break end
+									tool = findToolForMissing(active)
+									if not tool then break end
+								end
+								if held and held:HasTag("PetBoost") then
+									pcall(function() PetBoostService:FireServer("ApplyBoost", uuid) end)
+									setStatus(("Boost: %s -> #%s"):format(baseName(held.Name), uuid:sub(2, 5)))
+									task.wait(0.6)
+								end
 							end
 						end
 					end
@@ -9523,6 +9851,88 @@ return function(ctx)
 				value = uuid,
 				display = ("%s%s | %.2f KG | Age %s | #%s%s"):format(mutPrefix, pt, weight, tostring(age), uuid:sub(2, 5), tag),
 			}
+		end
+		if selectedSet and next(inv) then
+			local valid = {}
+			for uuid in pairs(inv) do valid[uuid] = true end
+			local changed = false
+			for u in pairs(selectedSet) do
+				if not valid[u] then selectedSet[u] = nil; changed = true end
+			end
+			if changed and ctx.persistState then ctx.persistState() end
+		end
+		table.sort(out, function(a, b)
+			local selA = selectedSet and selectedSet[a.value] and 1 or 0
+			local selB = selectedSet and selectedSet[b.value] and 1 or 0
+			if selA ~= selB then return selA > selB end
+			return a.display < b.display
+		end)
+		return out
+	end
+
+	-- daftar pet FAVORITE dari INVENTORY buat Team dropdown
+	function ctx.inventoryPetOptionsFavorite(selectedSet)
+		local out = {}
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return out end
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not inv then return out end
+		for uuid, v in pairs(inv) do
+			local pd = v.PetData or {}
+			if pd.IsFavorite then
+				local pt = v.PetType or "?"
+				local age = pd.Level or 0
+				local mut = pd.MutationType
+				local mutName = mut
+				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
+				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
+				local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
+				out[#out + 1] = {
+					value = uuid,
+					display = ("%s%s | Age %s | %.2f KG"):format(mutPrefix, pt, tostring(age), weight),
+				}
+			end
+		end
+		if selectedSet and next(inv) then
+			local valid = {}
+			for uuid in pairs(inv) do valid[uuid] = true end
+			local changed = false
+			for u in pairs(selectedSet) do
+				if not valid[u] then selectedSet[u] = nil; changed = true end
+			end
+			if changed and ctx.persistState then ctx.persistState() end
+		end
+		table.sort(out, function(a, b)
+			local selA = selectedSet and selectedSet[a.value] and 1 or 0
+			local selB = selectedSet and selectedSet[b.value] and 1 or 0
+			if selA ~= selB then return selA > selB end
+			return a.display < b.display
+		end)
+		return out
+	end
+
+	-- daftar pet NON-FAVORITE dari INVENTORY buat target GBXP
+	function ctx.inventoryPetOptionsNonFavorite(selectedSet)
+		local out = {}
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return out end
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not inv then return out end
+		for uuid, v in pairs(inv) do
+			local pd = v.PetData or {}
+			if not pd.IsFavorite then
+				local pt = v.PetType or "?"
+				local age = pd.Level or 0
+				local mut = pd.MutationType
+				local mutName = mut
+				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
+				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
+				local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
+				out[#out + 1] = {
+					value = uuid,
+					display = ("%s%s | Age %s | %.2f KG"):format(mutPrefix, pt, tostring(age), weight),
+				}
+			end
 		end
 		if selectedSet and next(inv) then
 			local valid = {}
@@ -9985,7 +10395,7 @@ return function(ctx)
 		local buySel   = CFG.merchantBuyEnabled
 		local buyBest  = CFG.merchantBuyBest
 		local sel = (CFG.merchantItems and CFG.merchantItems[selKey]) or {}
-		local all = sel["All"]
+		local all = sel["All"] or not next(sel)
 
 		local bestName, bestPrice, bestStock = nil, -1, 0
 		for name, v in pairs(catalog) do
@@ -10211,7 +10621,7 @@ return function(ctx)
 				lastMarker = marker
 				local st = shop and shop.Stocks or {}
 				local sel = CFG.buySeedNames or {}
-				local all = sel["All"]
+				local all = sel["All"] or not next(sel)
 				local bought = 0
 				for name, v in pairs(st) do
 					if all or sel[name] then
@@ -10243,7 +10653,7 @@ return function(ctx)
 				lastMarker = marker
 				local st = d and d.GearStock and d.GearStock.Stocks or {}
 				local sel = CFG.buyGearNames or {}
-				local all = sel["All"]
+				local all = sel["All"] or not next(sel)
 				local bought = 0
 				for name, v in pairs(st) do
 					if all or sel[name] then
@@ -10275,7 +10685,7 @@ return function(ctx)
 				lastMarker = marker
 				local st = d and d.PetEggStock and d.PetEggStock.Stocks or {}
 				local sel = CFG.buyEggNames or {}
-				local all = sel["All"]
+				local all = sel["All"] or not next(sel)
 				local bought = 0
 				for index, v in pairs(st) do
 					local nm = type(v) == "table" and v.EggName
@@ -11072,7 +11482,7 @@ return function(ctx)
 		}, pillBadge)
 
 		local function countSel()
-			local n = 0; for _ in pairs(selSet) do n += 1 end; return n
+			local n = 0; for _ in pairs(selSet) do n = n + 1 end; return n
 		end
 
 		local function updateSummary()
@@ -11614,7 +12024,7 @@ return function(ctx)
 	end
 
 	----------------------------------------------------------------- Start / Stop Control Bar (Bawah)
-	local function makeStartStopBar(parent, getRunning, onStart, onStop, order)
+	local function makeStartStopBar(parent, getRunning, onStart, onStop, order, customStartText, customStopText)
 		local bar = mk("Frame", {
 			Size = UDim2.new(1, 0, 1, 0),
 			BackgroundTransparency = 1,
@@ -11628,10 +12038,13 @@ return function(ctx)
 			VerticalAlignment = Enum.VerticalAlignment.Center,
 		}, bar)
 
+		local labelStart = customStartText or "⚡ START"
+		local labelStop = customStopText or "STOP"
+
 		local startBtn = mk("TextButton", {
-			Size = UDim2.fromOffset(88, 28),
+			Size = UDim2.fromOffset(math.max(92, #labelStart * 8 + 14), 28),
 			BackgroundColor3 = C.row,
-			Text = "⚡ START",
+			Text = labelStart,
 			Font = F.bold,
 			TextSize = 12,
 			TextColor3 = C.txt,
@@ -11642,9 +12055,9 @@ return function(ctx)
 		local startStroke = stroke(startBtn, C.strokeSub, 1.2, 0.4)
 
 		local stopBtn = mk("TextButton", {
-			Size = UDim2.fromOffset(78, 28),
+			Size = UDim2.fromOffset(math.max(78, #labelStop * 8 + 14), 28),
 			BackgroundColor3 = C.row,
-			Text = "STOP",
+			Text = labelStop,
 			Font = F.bold,
 			TextSize = 12,
 			TextColor3 = C.sub,
@@ -11654,12 +12067,29 @@ return function(ctx)
 		corner(stopBtn, 14)
 		local stopStroke = stroke(stopBtn, C.strokeSub, 1.2, 0.4)
 
+		-- Badge Mode: auto
+		local modeBadge = mk("Frame", {
+			Size = UDim2.fromOffset(92, 28),
+			BackgroundColor3 = C.row,
+			LayoutOrder = 3,
+		}, bar)
+		corner(modeBadge, 14)
+		stroke(modeBadge, C.acc, 1.2, 0.3)
+		mk("TextLabel", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Text = "Mode: auto",
+			Font = F.bold,
+			TextSize = 12,
+			TextColor3 = C.txt,
+		}, modeBadge)
+
 		local function refresh()
 			local running = getRunning()
 			if running then
 				startBtn.BackgroundColor3 = C.rowAlt
-				startBtn.TextColor3 = C.green
-				startStroke.Color = C.green
+				startBtn.TextColor3 = C.acc
+				startStroke.Color = C.acc
 				startStroke.Transparency = 0.1
 				startStroke.Thickness = 1.4
 
@@ -12506,7 +12936,7 @@ return function(ctx)
 					}, nameCol)
 
 					local function updateRuleText()
-						local curKg = tonumber(rule.kg) or 0.8
+						local curKg = tonumber(rule.kg) or 7.0
 						local curAction = tostring(rule.action or "KEEP"):upper()
 						local col = curAction == "KEEP" and "#6ef5b9" or "#ff4b78"
 						if rule.special then
@@ -12559,7 +12989,7 @@ return function(ctx)
 					local kgBox = mk("TextBox", {
 						Size = UDim2.fromScale(1, 1),
 						BackgroundTransparency = 1,
-						Text = tostring(rule.kg or 0.8),
+						Text = tostring(rule.kg or 7.0),
 						Font = F.bold,
 						TextSize = 12.5,
 						TextColor3 = C.txt,
@@ -12567,7 +12997,7 @@ return function(ctx)
 						TextXAlignment = Enum.TextXAlignment.Center,
 					}, kgFrame)
 					kgBox.FocusLost:Connect(function()
-						rule.kg = tonumber(kgBox.Text) or 0.8
+						rule.kg = tonumber(kgBox.Text) or 7.0
 						kgBox.Text = tostring(rule.kg)
 						persist()
 						updateRuleText()
@@ -12639,7 +13069,7 @@ return function(ctx)
 
 		-- Bulk Controls Below List
 		local bulkPetSet = {}
-		local bulkKgVal = 0.8
+		local bulkKgVal = 7.0
 		local bulkActionVal = "sell"
 		local bulkSpecialVal = false
 
@@ -12648,7 +13078,7 @@ return function(ctx)
 
 		makeInput(sCfgAcc, "KG (Bulk)", "Batas berat target pet",
 			function() return tostring(bulkKgVal) end,
-			function(t) bulkKgVal = tonumber(t) or 0.8 end, 10)
+			function(t) bulkKgVal = tonumber(t) or 7.0 end, 10)
 
 		local ACTION_OPTS = { { name = "sell", display = "sell" }, { name = "keep", display = "keep" } }
 		makeSingleDropdown(sCfgAcc, "Below KG Action (Bulk)", "Aksi jika pet di bawah batas KG",
@@ -12667,7 +13097,7 @@ return function(ctx)
 				for petName, isSel in pairs(bulkPetSet) do
 					if isSel then
 						CFG.hatchSellList[petName] = {
-							kg = tonumber(bulkKgVal) or 0.8,
+							kg = tonumber(bulkKgVal) or 7.0,
 							action = tostring(bulkActionVal):upper(),
 							special = bulkSpecialVal == true,
 						}
@@ -12801,7 +13231,7 @@ return function(ctx)
 		mk("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = 1 }, merAcc)
 		task.spawn(function()
 			while ctx.alive() do
-				if not onScreen(shopPage) then task.wait(1) continue end
+				if onScreen(shopPage) then
 				local ok, s = pcall(function() return ctx.getMerchantSummary() end)
 				if ok and s then
 					local lines = {}
@@ -12842,6 +13272,7 @@ return function(ctx)
 						lines[#lines + 1] = "<font color=\"#dc5050\">Belum ada item dipilih.</font> Pilih di 'Select Items per Merchant' atau nyalakan Auto Buy All/Best."
 					end
 					merStatus.Text = table.concat(lines, "\n")
+				end
 				end
 				task.wait(2)
 			end
@@ -12909,138 +13340,120 @@ return function(ctx)
 			function() if ctx.premiumGift then ctx.premiumGift() end end, 4)
 	end
 
-	------------------------------------------------------------------ ELEPHANT (V1 & V2)
+	------------------------------------------------------------------ ELEPHANT (AUTO KG)
 	do
 		local elephantPage = pageRef["Elephant"]
 		local sub = makeSubTabs(elephantPage, {
-			{ id = "v1", name = "Elephant V1" },
-			{ id = "v2", name = "Elephant V2 (Swap 40)" },
-		}, "v1", 1)
+			{ id = "elephant",  name = "Elephant" },
+			{ id = "nightmare", name = "Nightmare" },
+			{ id = "age100",    name = "100 Age" },
+			{ id = "xp",        name = "XP" },
+			{ id = "gbxp",      name = "GBXP" },
+			{ id = "config",    name = "⚙" },
+		}, "elephant", { hasBottomBar = true, hasInfoLine = true, defaultInfoText = "🐘 Elephant (0)   🍌 Nightmare (0)   💯 100 Age (0)   🧊 XP (0)   🧪 GBXP (0)" })
 
-		-- V1 SUB-TAB
-		local pV1 = sub.pages["v1"]
-		local acc = makeAccordion(pV1, "Automation Elephant V1", 1, true)
+		local function countTeam(t)
+			local n = 0; if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end; return n
+		end
 
-		-- Status (live)
-		local statusLbl = mk("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1, Text = "Loading stats...",
-			Font = F.reg, TextSize = 12, TextColor3 = C.txt,
-			TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-			LineHeight = 1.3, RichText = true, LayoutOrder = 0
-		}, acc)
-		mk("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = 1 }, acc)
-		task.spawn(function()
-			while ctx.alive() do
-				if not onScreen(elephantPage) then task.wait(1) continue end
-				local ok, s = pcall(function() return ctx.getElephantSummary() end)
-				if ok and s then
-					local col = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
-					statusLbl.Text = string.format(
-						"Automation Status: <font color=\"%s\"><b>%s</b></font>\n\n" ..
-						"Elephant Team: <font color=\"#8c929e\">%s</font>\n" ..
-						"Target Types: <font color=\"#f5c82d\">%s</font>\n" ..
-						"Target Pets Ready: <font color=\"#8c929e\">%s</font>\n" ..
-						"Pets at Max KG: <font color=\"#8c929e\">%s</font>\n\n" ..
-						"Max Target Pets: <font color=\"#8c929e\">%s</font>\n" ..
-						"Target Weight: <font color=\"#f5c82d\"><b>%s</b></font>",
-						col, s.status, s.team, s.types, s.ready, s.maxKg, s.maxTarget, s.targetWeight)
-				end
-				task.wait(1.5)
-			end
-		end)
+		local function updateEleInfo()
+			if not sub.infoLabel then return end
+			local eleN  = countTeam(CFG.elephantTeamUuids)
+			local nmN   = countTeam(CFG.elephantNightmareTeam)
+			local a100N = countTeam(CFG.elephant100AgeTeam)
+			local xpN   = countTeam(CFG.elephantXpTeam)
+			local gbxpN = countTeam(CFG.gbxpPetUuids)
+			sub.infoLabel.Text = string.format("🐘 Elephant (%d)   🍌 Nightmare (%d)   💯 100 Age (%d)   🧊 XP (%d)   🧪 GBXP (%d)", eleN, nmN, a100N, xpN, gbxpN)
+		end
+		updateEleInfo()
 
-		-- Settings (dalam accordion yang sama)
-		makeMultiDropdownDyn(acc, "V1 Pet Team", "Select elephant pet team (tetap di garden)",
-			function() return ctx.inventoryPetOptions(CFG.elephantTeamUuids) end, CFG.elephantTeamUuids, function() persist() end, 2)
-		makeMultiDropdown(acc, "V1 Target Pet Types", "Select pet types to auto-elephant (semua pet di game)",
-			reg.PET_OPTIONS, CFG.elephantPetTypes, function() persist() end, 3)
-		makeInput(acc, "Target Weight (KG)", "Berat max sebelum diganti (mis. 5.5)",
+		local function setupTeamTab(page, teamName, teamCfg, equipAgeKey, unequipAgeKey, kgMinKey, kgMaxKey, defEquipAge, defUnequipAge, defKgMin, defKgMax)
+			local acc = makeAccordion(page, string.format("( %s Team ) Threshold Age & Kg", teamName), 1, true)
+			makeInput(acc, "Equip Age", "Umur minimal pet sebelum dipasang",
+				function() return tostring(CFG[equipAgeKey] or defEquipAge or 0) end,
+				function(txt) CFG[equipAgeKey] = tonumber(txt) or 0; persist() end, 1)
+			makeInput(acc, "Unequip Age", "Umur maksimal pet sebelum dicopot",
+				function() return tostring(CFG[unequipAgeKey] or defUnequipAge or 0) end,
+				function(txt) CFG[unequipAgeKey] = tonumber(txt) or 0; persist() end, 2)
+			makeInput(acc, "Equip When KG Min ( Assumed at age 100 )", "Batas berat KG minimal",
+				function() return tostring(CFG[kgMinKey] or defKgMin or 0) end,
+				function(txt) CFG[kgMinKey] = tonumber(txt) or 0; persist() end, 3)
+			makeInput(acc, "Unequip When KG Max ( Assumed at age 100 )", "Batas berat KG maksimal",
+				function() return tostring(CFG[kgMaxKey] or defKgMax or 0) end,
+				function(txt) CFG[kgMaxKey] = tonumber(txt) or 0; persist() end, 4)
+			makeMultiDropdownDyn(acc, string.format("Select Pet %s Team (Favorite List)", teamName), "Pilih pet tim (hanya pet Favorit)",
+				function()
+					if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(teamCfg) end
+					return ctx.inventoryPetOptions(teamCfg)
+				end, teamCfg, function() persist(); updateEleInfo() end, 5)
+		end
+
+		-- 1. Elephant Team
+		setupTeamTab(sub.pages["elephant"], "Elephant", CFG.elephantTeamUuids, "elephantEquipAge", "elephantUnequipAge", "elephantKgMin", "elephantKgMax", 40, 0, -60.5, 60.5)
+
+		-- 2. Nightmare Team
+		setupTeamTab(sub.pages["nightmare"], "Nightmare", CFG.elephantNightmareTeam, "nightmareEquipAge", "nightmareUnequipAge", "nightmareKgMin", "nightmareKgMax", 0, 0, 0, 0)
+
+		-- 3. 100 Age Team
+		setupTeamTab(sub.pages["age100"], "100 Age", CFG.elephant100AgeTeam, "age100EquipAge", "age100UnequipAge", "age100KgMin", "age100KgMax", 0, 0, 0, 0)
+
+		-- 4. XP Team
+		setupTeamTab(sub.pages["xp"], "XP", CFG.elephantXpTeam, "xpEquipAge", "xpUnequipAge", "xpKgMin", "xpKgMax", 0, 50, 0, 0)
+
+		-- 5. GBXP Tab (Pet Target Non-Favorite)
+		local pGbxp = sub.pages["gbxp"]
+		local gbxpAcc = makeAccordion(pGbxp, "( GBXP Team ) Threshold Age & Kg", 1, true)
+		makeInput(gbxpAcc, "Equip Age", "Umur minimal pet sebelum dipasang",
+			function() return tostring(CFG.gbxpEquipAge or 0) end,
+			function(txt) CFG.gbxpEquipAge = tonumber(txt) or 0; persist() end, 1)
+		makeInput(gbxpAcc, "Unequip Age", "Umur maksimal pet sebelum dicopot",
+			function() return tostring(CFG.gbxpUnequipAge or 100) end,
+			function(txt) CFG.gbxpUnequipAge = tonumber(txt) or 100; persist() end, 2)
+		makeInput(gbxpAcc, "Equip When KG Min ( Assumed at age 100 )", "Batas berat KG minimal",
+			function() return tostring(CFG.gbxpKgMin or 0) end,
+			function(txt) CFG.gbxpKgMin = tonumber(txt) or 0; persist() end, 3)
+		makeInput(gbxpAcc, "Unequip When KG Max ( Assumed at age 100 )", "Batas berat KG maksimal",
+			function() return tostring(CFG.gbxpKgMax or 0) end,
+			function(txt) CFG.gbxpKgMax = tonumber(txt) or 0; persist() end, 4)
+		makeInput(gbxpAcc, "GBXP Max Equip", "Jumlah pet target terpasang bersamaan di garden",
+			function() return tostring(CFG.gbxpMaxEquip or 2) end,
+			function(txt) CFG.gbxpMaxEquip = tonumber(txt) or 2; persist() end, 5)
+		makeMultiDropdownDyn(gbxpAcc, "Select Pet GBXP (Non Favorite)", "Target pet untuk di-GB (hanya pet Non-Favorit)",
+			function()
+				if ctx.inventoryPetOptionsNonFavorite then return ctx.inventoryPetOptionsNonFavorite(CFG.gbxpPetUuids) end
+				return ctx.inventoryPetOptions(CFG.gbxpPetUuids)
+			end, CFG.gbxpPetUuids, function() persist(); updateEleInfo() end, 6)
+
+		-- 6. Config Tab (Settings & V2)
+		local pCfg = sub.pages["config"]
+		local cfgAcc = makeAccordion(pCfg, "Automation Elephant Settings", 1, true)
+		makeInput(cfgAcc, "Target Weight (KG)", "Berat max sebelum diganti",
 			function() return tostring(CFG.elephantTargetWeight) end,
-			function(txt) CFG.elephantTargetWeight = tonumber(txt) or 5.5; persist() end, 4)
-		makeInput(acc, "Max Target Pets", "Jumlah pet target aktif barengan",
+			function(txt) CFG.elephantTargetWeight = tonumber(txt) or 5.5; persist() end, 1)
+		makeInput(cfgAcc, "Max Target Pets", "Jumlah pet target aktif barengan",
 			function() return tostring(CFG.elephantMaxPets) end,
-			function(txt) CFG.elephantMaxPets = tonumber(txt) or 2; persist() end, 5)
-		local refreshEleBar
-		makeToggle(acc, "Enable Automation Elephant", "Rotasi pet target otomatis. OFF = cabut semua pet dari garden.",
+			function(txt) CFG.elephantMaxPets = tonumber(txt) or 2; persist() end, 2)
+		makeToggle(cfgAcc, "Enable Automation Elephant", "Rotasi pet target otomatis",
 			function() return CFG.elephantEnabled end,
 			function(v)
 				CFG.elephantEnabled = v; persist()
 				if v then ctx.startElephant() else ctx.stopElephant() end
-				if refreshEleBar then refreshEleBar() end
-			end, 6)
-
-		-- ===================== ELEPHANT V2 (swap gajah on lvl 40) =====================
-		local pV2 = sub.pages["v2"]
-		local acc2 = makeAccordion(pV2, "Automation Elephant V2", 1, true)
-
-		local v2Lbl = mk("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1, Text = "Loading...",
-			Font = F.reg, TextSize = 12, TextColor3 = C.txt,
-			TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-			LineHeight = 1.3, RichText = true, LayoutOrder = 0
-		}, acc2)
-		mk("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = 1 }, acc2)
-		task.spawn(function()
-			while ctx.alive() do
-				if not onScreen(elephantPage) then task.wait(1) continue end
-				local ok, s = pcall(function() return ctx.getElephantV2Summary() end)
-				if ok and s then
-					local col = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
-					v2Lbl.Text = string.format(
-						"Automation Status: <font color=\"%s\"><b>%s</b></font>  |  <font color=\"#f5c82d\">%s</font>\n\n" ..
-						"Elephant Team: <font color=\"#8c929e\">%s</font>\n" ..
-						"Target Types: <font color=\"#f5c82d\">%s</font>\n" ..
-						"Target Pets Ready: <font color=\"#8c929e\">%s</font>\n" ..
-						"Pets at Max KG: <font color=\"#8c929e\">%s</font>\n" ..
-						"Max Target Pets: <font color=\"#8c929e\">%s</font>  |  Target Weight: <font color=\"#f5c82d\"><b>%s</b></font>\n\n" ..
-						"Gajah: <font color=\"#8c929e\">%s</font>\n" ..
-						"Switch: <font color=\"#8c929e\">%s</font>\n" ..
-						"Gajah masuk saat target Age >= <font color=\"#f5c82d\"><b>%s</b></font>",
-						col, s.status, s.info, s.team, s.types, s.ready, s.maxKg, s.maxTarget, s.targetWeight, s.gajah, s.switch, s.level)
-				end
-				task.wait(0.5)
-			end
-		end)
-
-		makeMultiDropdownDyn(acc2, "V2 Elephant Team", "Team standby di garden (sumber pilihan Pet Switch)",
-			function() return ctx.inventoryPetOptions(CFG.elephantV2Team) end, CFG.elephantV2Team, function() persist() end, 2)
-		makeMultiDropdown(acc2, "V2 Target Pet Types", "Select pet types to auto-level + elephant (semua pet di game)",
-			reg.PET_OPTIONS, CFG.elephantV2Types, function() persist() end, 3)
-		makeSingleDropdown(acc2, "Gajah Pet (Slot 1)", "Pilih gajah yang akan di-swap masuk saat target lvl 40",
-			function() return ctx.elephantV2GajahOptions() end,
-			function() return ctx.elephantV2Label(CFG.elephantV2Gajah) end,
-			function(uuid) CFG.elephantV2Gajah = uuid; persist() end, 4)
-		makeSingleDropdown(acc2, "Pet Switch (Slot 2)", "Pilih pet dari Team yang diganti oleh Gajah (biasanya Capy)",
-			function() return ctx.elephantV2SwitchOptions() end,
-			function() return ctx.elephantV2Label(CFG.elephantV2Switch) end,
-			function(uuid) CFG.elephantV2Switch = uuid; persist() end, 5)
-		makeInput(acc2, "Target Weight (KG)", "Berat max target sebelum dilepas (mis. 5.5)",
-			function() return tostring(CFG.elephantV2Weight) end,
-			function(txt) CFG.elephantV2Weight = tonumber(txt) or 5.5; persist() end, 6)
-		makeInput(acc2, "Max Target Pets", "Jumlah pet target aktif barengan di garden",
-			function() return tostring(CFG.elephantV2MaxPets) end,
-			function(txt) CFG.elephantV2MaxPets = tonumber(txt) or 3; persist() end, 7)
-		makeInput(acc2, "Trigger Level", "Level target buat masukin gajah (default 40)",
-			function() return tostring(CFG.elephantV2Level) end,
-			function(txt) CFG.elephantV2Level = tonumber(txt) or 40; persist() end, 8)
-		makeToggle(acc2, "Enable Elephant V2", "Rotasi target + swap gajah otomatis saat target lvl 40. Jalan barengan PNP.",
+			end, 3)
+		makeToggle(cfgAcc, "Enable Elephant V2", "Swap gajah otomatis saat target lvl 40",
 			function() return CFG.elephantV2Enabled end,
 			function(v)
 				CFG.elephantV2Enabled = v; persist()
 				if v then ctx.startElephantV2() else ctx.stopElephantV2() end
-			end, 9)
+			end, 4)
 
-		-- Start/Stop Bar for V1
-		refreshEleBar = makeStartStopBar(elephantPage,
-			function() return CFG.elephantEnabled end,
-			function()
-				CFG.elephantEnabled = true; persist(); ctx.startElephant()
-			end,
-			function()
-				CFG.elephantEnabled = false; persist(); ctx.stopElephant()
-			end, 999)
+		-- Bottom Bar: [⚡ START KG] [STOP] [Mode: auto]
+		if sub.bottomBarFrame then
+			makeStartStopBar(sub.bottomBarFrame,
+				function() return CFG.elephantEnabled end,
+				function() CFG.elephantEnabled = true; persist(); ctx.startElephant() end,
+				function() CFG.elephantEnabled = false; persist(); ctx.stopElephant() end,
+				1, "⚡ START KG", "STOP")
+		end
 	end
 
 	------------------------------------------------------------------ LEVELING
@@ -13076,7 +13489,7 @@ return function(ctx)
 
 		task.spawn(function()
 			while ctx.alive() do
-				if not onScreen(levelingPage) then task.wait(1) continue end
+				if onScreen(levelingPage) then
 				local ok, s = pcall(function() return ctx.getLevelingSummary() end)
 				if ok and s then
 					local statusColor = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
@@ -13098,6 +13511,7 @@ return function(ctx)
 						s.maxInGarden,
 						s.targetLevel
 					)
+				end
 				end
 				task.wait(1.5)
 			end
@@ -13141,7 +13555,7 @@ return function(ctx)
 		mk("Frame", { Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, LayoutOrder = 1 }, lv2)
 		task.spawn(function()
 			while ctx.alive() do
-				if not onScreen(levelingPage) then task.wait(1) continue end
+				if onScreen(levelingPage) then
 				local ok, s = pcall(function() return ctx.getLevelingV2Summary() end)
 				if ok and s then
 					local col = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
@@ -13155,6 +13569,7 @@ return function(ctx)
 						tostring(s.p1target), s.p1team, s.p1queue,
 						tostring(s.p2target), s.p2team, s.p2queue,
 						s.maxLvl or 0)
+				end
 				end
 				task.wait(1.5)
 			end
@@ -13193,165 +13608,176 @@ return function(ctx)
 			end, 9)
 	end
 
-	------------------------------------------------------------------ MUTATION
+	------------------------------------------------------------------ MUTATION (AUTO MUT+LVL)
 	local mutationPage = pageRef["Mutation"]
 	do
 		local mutSub = makeSubTabs(mutationPage, {
-			{ id = "machine", name = "Machine" },
-			{ id = "cleanse", name = "Aura Cleanse" },
-		}, "machine", { hasBottomBar = false, hasInfoLine = false })
+			{ id = "mutasi",  name = "Mutasi" },
+			{ id = "age500",  name = "500 Age" },
+			{ id = "xp",      name = "XP" },
+			{ id = "gbxp",    name = "GBXP" },
+			{ id = "config",  name = "Config" },
+			{ id = "cleanse", name = "⚙" },
+		}, "mutasi", { hasBottomBar = true, hasInfoLine = true, defaultInfoText = "🧬 Mutation (0)   💯 500 Age (0)   🧊 XP (0)   🧪 GBXP (0)" })
 
-		local pMutMachine = mutSub.pages["machine"]
-		local pMutCleanse = mutSub.pages["cleanse"]
+		local function countMutTeam(t)
+			local n = 0; if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end; return n
+		end
 
-		-- 1. Status Accordion (Machine)
-		local statusAcc = makeAccordion(pMutMachine, "Automation Mutation Machine", 1, true)
-		
-		local statusLbl = mk("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 0),
-			AutomaticSize = Enum.AutomaticSize.Y,
+		local function updateMutInfo()
+			if not mutSub.infoLabel then return end
+			local mutN  = countMutTeam(CFG.mutationBoostTeam)
+			local a500N = countMutTeam(CFG.mut500AgeTeam or CFG.mutationPhoenixTeam)
+			local xpN   = countMutTeam(CFG.mutXpTeam or CFG.mutationExpTeam)
+			local gbxpN = countMutTeam(CFG.mutGbxpPets or CFG.gbxpPetUuids)
+			mutSub.infoLabel.Text = string.format("🧬 Mutation (%d)   💯 500 Age (%d)   🧊 XP (%d)   🧪 GBXP (%d)", mutN, a500N, xpN, gbxpN)
+		end
+		updateMutInfo()
+
+		-- 1. Mutasi Sub-tab (Machine settings matching screenshot)
+		local pMutasi = mutSub.pages["mutasi"]
+		local mutAcc = makeAccordion(pMutasi, "( Mutation Team ) Threshold Age & Kg", 1, true)
+
+		makeSingleDropdown(mutAcc, "List Mode", "Mode pemrosesan mutasi",
+			function() return { { value = "machine", display = "machine" } } end,
+			function() return CFG.mutationListMode or "machine" end,
+			function(v) CFG.mutationListMode = v; persist() end, 1)
+
+		makeInput(mutAcc, "Umur Req Machine", "Umur minimal pet sebelum dimasukkan mesin",
+			function() return tostring(CFG.mutationUmurReq or CFG.mutationTargetAge or 50) end,
+			function(txt)
+				local n = tonumber(txt) or 50
+				CFG.mutationUmurReq = n; CFG.mutationTargetAge = n; persist()
+			end, 2)
+
+		makeSingleDropdown(mutAcc, "Select Mutation (Machine)", "Pilih mutasi target yang diinginkan dari mesin",
+			function()
+				local opts = {}
+				local list = ctx.reg.MACHINE_MUT_OPTIONS or ctx.reg.MUT_OPTIONS or { "Rainbow", "Ghost", "Shocked" }
+				for _, m in ipairs(list) do
+					if m ~= "None" then opts[#opts + 1] = { value = m, display = m } end
+				end
+				return opts
+			end,
+			function() return CFG.mutationSelected or "Rainbow" end,
+			function(v)
+				CFG.mutationSelected = v
+				CFG.mutationTargetMutations = { [v] = true }
+				persist()
+			end, 3)
+
+		makeToggle(mutAcc, "Auto Shard Cleaner (mutations not selected above will be cleaned)", "Otomatis bersihkan pet jika hasil mutasi bukan mutasi yang dipilih di atas",
+			function() return CFG.mutationAutoShardCleaner end,
+			function(v) CFG.mutationAutoShardCleaner = v; persist() end, 4)
+
+		makeSingleDropdown(mutAcc, "Pet Team Before Claim Machine", "Tim pet yang dipasang sesaat sebelum klaim pet dari mesin",
+			function()
+				return {
+					{ value = "+8",      display = "+8" },
+					{ value = "Phoenix", display = "Phoenix" },
+					{ value = "None",    display = "None" },
+				}
+			end,
+			function() return CFG.mutationPetTeamBeforeClaim or "+8" end,
+			function(v) CFG.mutationPetTeamBeforeClaim = v; persist() end, 5)
+
+		local machineStatusLbl = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 24),
 			BackgroundTransparency = 1,
-			Text = "Loading stats...",
-			Font = F.reg,
+			Text = "Machine: IDLE — siap submit pet",
+			Font = F.bold,
 			TextSize = 13,
-			TextColor3 = C.txt,
+			TextColor3 = Color3.fromRGB(133, 208, 255),
 			TextXAlignment = Enum.TextXAlignment.Left,
-			TextWrapped = true,
-			LineHeight = 1.35,
 			RichText = true,
-			LayoutOrder = 0
-		}, statusAcc)
-		mk("Frame", { Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, LayoutOrder = 1 }, statusAcc)
+			LayoutOrder = 6,
+		}, mutAcc)
 
 		task.spawn(function()
 			while ctx.alive() do
-				if not onScreen(mutationPage) then task.wait(1) continue end
-				local ok, s = pcall(function() return ctx.getMutationSummary() end)
-				if ok and s then
-					local statusColor = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
-					statusLbl.Text = string.format(
-						"Status: <font color=\"%s\"><b>%s</b></font>\n" ..
-						"Phase: <b>%s</b>\n\n" ..
-						"EXP Team: <font color=\"#8c929e\">%d pets</font>\n" ..
-						"Boost Team: <font color=\"#8c929e\">%d pets</font>\n" ..
-						"Phoenix Team: <font color=\"#8c929e\">%d pets</font>\n\n" ..
-						"Target Types: <font color=\"#f5c82d\">%s</font>\n" ..
-						"Keep Mutations: <font color=\"#f5c82d\">%s</font>\n" ..
-						"Target Age: <font color=\"#f5c82d\"><b>%s</b></font>\n\n" ..
-						"Machine: <font color=\"#85d0ff\"><b>%s</b></font>\n\n" ..
-						"Target Pets Ready: <font color=\"#8c929e\">%d pets</font>\n" ..
-						"Target Pets Done: <font color=\"#5acc78\"><b>%d pets</b></font>",
-						statusColor, s.status,
-						s.phase,
-						s.expCount,
-						s.boostCount,
-						s.phoenixCount,
-						s.types,
-						s.mutations,
-						tostring(s.targetAge),
-						s.machine,
-						s.readyCount,
-						s.doneCount
-					)
+				if onScreen(mutationPage) then
+					local phase = ctx.state.mutationPhase or "IDLE — siap submit pet"
+					machineStatusLbl.Text = "Machine: " .. phase
 				end
-				task.wait(1.5)
+				task.wait(1.0)
 			end
 		end)
 
-		-- Settings (dalam accordion yang sama dengan status)
-		local settingsAcc = statusAcc
+		-- 2. 500 Age Sub-tab
+		local p500 = mutSub.pages["age500"]
+		local acc500 = makeAccordion(p500, "( 500 Age Team ) Threshold Age & Kg", 1, true)
+		makeMultiDropdownDyn(acc500, "Select Pet 500 Age Team (Favorite List)", "Pilih pet tim untuk fase 500 Age (Favorite List)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.mut500AgeTeam) end
+				return ctx.inventoryPetOptions(CFG.mut500AgeTeam)
+			end, CFG.mut500AgeTeam, function() persist(); updateMutInfo() end, 1)
 
-		-- EXP Team (Multi-dropdown UUIDs)
-		makeMultiDropdownDyn(settingsAcc, "EXP Team (Leveling)", "Pets for leveling target to age 50/500",
-			function() return ctx.inventoryPetOptions(CFG.mutationExpTeam) end, CFG.mutationExpTeam, function() persist() end, 2)
+		-- 3. XP Sub-tab
+		local pXp = mutSub.pages["xp"]
+		local accXp = makeAccordion(pXp, "( XP Team ) Threshold Age & Kg", 1, true)
+		makeMultiDropdownDyn(accXp, "Select Pet XP Team (Favorite List)", "Pilih pet tim EXP untuk leveling (Favorite List)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.mutXpTeam) end
+				return ctx.inventoryPetOptions(CFG.mutXpTeam)
+			end, CFG.mutXpTeam, function() persist(); updateMutInfo() end, 1)
 
-		-- Boost Team (Machine) (Multi-dropdown UUIDs)
-		makeMultiDropdownDyn(settingsAcc, "Boost Team (Machine)", "Pets for boosting mutation machine speed",
-			function() return ctx.inventoryPetOptions(CFG.mutationBoostTeam) end, CFG.mutationBoostTeam, function() persist() end, 3)
+		-- 4. GBXP Sub-tab
+		local pGbxp = mutSub.pages["gbxp"]
+		local accGbxp = makeAccordion(pGbxp, "( GBXP Team ) Threshold Age & Kg", 1, true)
+		makeMultiDropdownDyn(accGbxp, "Select Pet GBXP (Non Favorite)", "Target pet yang dimutasi / leveling (Non Favorite Only)",
+			function()
+				if ctx.inventoryPetOptionsNonFavorite then return ctx.inventoryPetOptionsNonFavorite(CFG.mutGbxpPets) end
+				return ctx.inventoryPetOptions(CFG.mutGbxpPets)
+			end, CFG.mutGbxpPets, function() persist(); updateMutInfo() end, 1)
 
-		-- Phoenix Team (Claim) (Multi-dropdown UUIDs)
-		makeMultiDropdownDyn(settingsAcc, "Phoenix Team (Claim)", "Pets for claiming mutated pet",
-			function() return ctx.inventoryPetOptions(CFG.mutationPhoenixTeam) end, CFG.mutationPhoenixTeam, function() persist() end, 4)
-
-		-- Target Pet Types (semua pet di game, bukan cuma yang di inventory)
-		makeMultiDropdown(settingsAcc, "Target Pet Types", "Pet types to mutate (semua pet di game)",
-			reg.PET_OPTIONS, CFG.mutationTargetTypes, function() persist() end, 5)
-
-		-- Target Mutations (Multi-dropdown Mutations)
-		makeMultiDropdown(settingsAcc, "Target Mutations (Machine)", "Stop when pet gets these mutations (hanya mutasi mesin)",
-			ctx.reg.MACHINE_MUT_OPTIONS or ctx.reg.MUT_OPTIONS or {"None"}, CFG.mutationTargetMutations, function() persist() end, 6)
-
-		-- Target Age (Input)
-		makeInput(settingsAcc, "Target Age", "Level to reach before submitting (e.g. 50 or 500)",
-			function() return tostring(CFG.mutationTargetAge) end,
-			function(txt) CFG.mutationTargetAge = tonumber(txt) or 50; persist() end, 7)
-
-		-- Delay Auto Claim (Input)
-		makeInput(settingsAcc, "Delay Auto Claim (sec)", "Wait before claiming mutated pet from machine",
+		-- 5. Config Sub-tab
+		local pConfig = mutSub.pages["config"]
+		local accConfig = makeAccordion(pConfig, "Mutation Machine Configuration", 1, true)
+		makeMultiDropdownDyn(accConfig, "EXP Team (Leveling)", "Pets for leveling target to req age",
+			function() return ctx.inventoryPetOptions(CFG.mutationExpTeam) end, CFG.mutationExpTeam, function() persist() end, 1)
+		makeMultiDropdownDyn(accConfig, "Boost Team (Machine)", "Pets for boosting mutation machine speed",
+			function() return ctx.inventoryPetOptions(CFG.mutationBoostTeam) end, CFG.mutationBoostTeam, function() persist() end, 2)
+		makeMultiDropdownDyn(accConfig, "Phoenix Team (Claim)", "Pets for claiming mutated pet",
+			function() return ctx.inventoryPetOptions(CFG.mutationPhoenixTeam) end, CFG.mutationPhoenixTeam, function() persist() end, 3)
+		makeMultiDropdown(accConfig, "Target Pet Types", "Pet types to mutate (semua pet di game)",
+			reg.PET_OPTIONS, CFG.mutationTargetTypes, function() persist() end, 4)
+		makeInput(accConfig, "Delay Auto Claim (sec)", "Wait before claiming mutated pet",
 			function() return tostring(CFG.mutationDelayAutoClaim) end,
-			function(txt) CFG.mutationDelayAutoClaim = tonumber(txt) or 0.5; persist() end, 8)
-
-		-- Enable Auto Mutation Machine (Toggle)
-		ctx.state.mutationToggleRender = makeToggle(settingsAcc, "Enable Auto Mutation Machine", "Submit, start, and claim mutated pets automatically",
+			function(txt) CFG.mutationDelayAutoClaim = tonumber(txt) or 0.5; persist() end, 5)
+		makeToggle(accConfig, "Enable Auto Mutation Machine", "Submit, start, and claim mutated pets automatically",
 			function() return CFG.mutationEnabled end,
 			function(v)
 				CFG.mutationEnabled = v; persist()
 				if v then ctx.startMutation() else ctx.stopMutation() end
-			end, 9)
+			end, 6)
 
-		-- Accordion: Automation Mutation (mutasi via aura + cleanse)
-		local cleanseAcc = makeAccordion(pMutCleanse, "Automation Mutation (Aura)", 1, true)
-
-		-- Status (live)
-		local cleanseLbl = mk("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1, Text = "Loading stats...",
-			Font = F.reg, TextSize = 13, TextColor3 = C.txt,
-			TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-			LineHeight = 1.35, RichText = true, LayoutOrder = 0
-		}, cleanseAcc)
-		mk("Frame", { Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, LayoutOrder = 1 }, cleanseAcc)
-		task.spawn(function()
-			while ctx.alive() do
-				if not onScreen(mutationPage) then task.wait(1) continue end
-				local ok, s = pcall(function() return ctx.getCleanseSummary() end)
-				if ok and s then
-					local col = s.status == "ACTIVE" and "#5acc78" or "#dc5050"
-					local alreadyLines = ""
-					for _, k in ipairs(s.keepOrder) do
-						alreadyLines = alreadyLines .. string.format("- Already %s: <font color=\"#8c929e\">%d pets</font>\n", k, s.already[k] or 0)
-					end
-					cleanseLbl.Text = string.format(
-						"Automation Status: <font color=\"%s\"><b>%s</b></font>\n\n" ..
-						"Mutation Team: <font color=\"#8c929e\">%d pets</font>\n" ..
-						"Target Types: <font color=\"#f5c82d\">%s</font>\n" ..
-						"Mutations to Keep: <font color=\"#f5c82d\">%s</font>\n\n" ..
-						"Pet Statistics:\n" ..
-						"- Pets Ready to Mutation: <font color=\"#8c929e\">%d pets</font>\n" ..
-						"%s\n" ..
-						"Max in Garden: <font color=\"#8c929e\">%d pets</font>\n\n" ..
-						"Status: <font color=\"#85d0ff\">%s</font>",
-						col, s.status, s.team, s.types, s.keep, s.ready, alreadyLines, s.maxPets, s.phase)
-				end
-				task.wait(1.5)
-			end
-		end)
-
-		makeMultiDropdownDyn(cleanseAcc, "Pet Team for Mutation", "Pet aura pemberi mutasi (tetap di garden)",
-			function() return ctx.inventoryPetOptions(CFG.cleanseTeamUuids) end, CFG.cleanseTeamUuids, function() persist() end, 2)
-		makeMultiDropdown(cleanseAcc, "Pet Types for Mutation", "Tipe pet target yang mau dimutasi (semua pet di game)",
-			reg.PET_OPTIONS, CFG.cleansePetTypes, function() persist() end, 3)
+		-- 6. Aura Cleanse (⚙)
+		local pCleanse = mutSub.pages["cleanse"]
+		local cleanseAcc = makeAccordion(pCleanse, "Automation Mutation (Aura)", 1, true)
+		makeMultiDropdownDyn(cleanseAcc, "Pet Team for Mutation", "Pet aura pemberi mutasi",
+			function() return ctx.inventoryPetOptions(CFG.cleanseTeamUuids) end, CFG.cleanseTeamUuids, function() persist() end, 1)
+		makeMultiDropdown(cleanseAcc, "Pet Types for Mutation", "Tipe pet target yang mau dimutasi",
+			reg.PET_OPTIONS, CFG.cleansePetTypes, function() persist() end, 2)
 		makeMultiDropdown(cleanseAcc, "Mutations to Keep", "Mutasi ini disimpan (won't be cleansed)",
-			ctx.reg.MUT_OPTIONS or {"None"}, CFG.cleanseKeepMutations, function() persist() end, 4)
+			ctx.reg.MUT_OPTIONS or {"None"}, CFG.cleanseKeepMutations, function() persist() end, 3)
 		makeInput(cleanseAcc, "Max Pets in Garden", "Max pet target di garden barengan",
 			function() return tostring(CFG.cleanseMaxPets) end,
-			function(txt) CFG.cleanseMaxPets = tonumber(txt) or 2; persist() end, 5)
-		makeToggle(cleanseAcc, "Enable Auto Mutation", "Mutasi target via aura; cleanse mutasi salah, simpan mutasi keep",
+			function(txt) CFG.cleanseMaxPets = tonumber(txt) or 2; persist() end, 4)
+		makeToggle(cleanseAcc, "Enable Auto Mutation (Aura)", "Mutasi target via aura; cleanse mutasi salah",
 			function() return CFG.cleanseEnabled end,
 			function(v)
 				CFG.cleanseEnabled = v; persist()
 				if v then ctx.startCleanse() else ctx.stopCleanse() end
-			end, 6)
+			end, 5)
+
+		-- Bottom Bar: [⚡ RUNNING.] [STOP NM+LVL] [Mode: auto]
+		if mutSub.bottomBarFrame then
+			makeStartStopBar(mutSub.bottomBarFrame,
+				function() return CFG.mutationEnabled end,
+				function() CFG.mutationEnabled = true; persist(); ctx.startMutation() end,
+				function() CFG.mutationEnabled = false; persist(); ctx.stopMutation() end,
+				1, "⚡ RUNNING.", "STOP NM+LVL")
+		end
 	end
 
 	------------------------------------------------------------------ PET (PNP)
@@ -13510,8 +13936,9 @@ return function(ctx)
 	end
 	task.spawn(function()
 		while ctx.alive() do
-			if not onScreen(stLblTicket) then task.wait(2) continue end
-			pcall(function() ctx.refreshTradeStatus() end)
+			if onScreen(stLblTicket) then
+				pcall(function() ctx.refreshTradeStatus() end)
+			end
 			task.wait(2)
 		end
 	end)
@@ -13582,8 +14009,9 @@ return function(ctx)
 	end
 	task.spawn(function()
 		while ctx.alive() do
-			if not onScreen(stLblGift) then task.wait(2) continue end
-			pcall(function() ctx.refreshGiftStatus() end)
+			if onScreen(stLblGift) then
+				pcall(function() ctx.refreshGiftStatus() end)
+			end
 			task.wait(2)
 		end
 	end)
@@ -13624,8 +14052,14 @@ return function(ctx)
 	makeToggle(fav, "Auto Favourite Pets", "Automatically favorite selected pet types",
 		function() return CFG.autoFavorite end,
 		function(v) CFG.autoFavorite = v; persist(); if v then ctx.startAutoFavorite() else ctx.stopAutoFavorite() end end, 1)
-	makeMultiDropdown(fav, "Favourite Pet Types", "Pet types to keep favorited",
+	makeMultiDropdown(fav, "Favourite Pet Types", "Pet types to keep favorited (kosong = semua pet)",
 		reg.PET_OPTIONS, CFG.favoritePetTypes, function() persist() end, 2)
+	makeInput(fav, "Weight Filter (KG)", "0=off | +6 = min 6kg | -6 = max 6kg",
+		function() return tostring(CFG.favoriteWeightFilter or 0) end,
+		function(txt) CFG.favoriteWeightFilter = tonumber(txt) or 0; persist() end, 3)
+	makeInput(fav, "Age Filter", "0=off | +50 = min age 50 | -50 = max age 50",
+		function() return tostring(CFG.favoriteAgeFilter or 0) end,
+		function(txt) CFG.favoriteAgeFilter = tonumber(txt) or 0; persist() end, 4)
 
 	-- Accordion: Automation Unfavourite Pets
 	local unfav = makeAccordion(pInvFav, "Automation Unfavourite Pets", 2, true)
@@ -13638,6 +14072,12 @@ return function(ctx)
 		end, 1)
 	makeMultiDropdown(unfav, "Unfavourite Pet Types", "Pet types to automatically unfavorite (kosong = semua pet)",
 		reg.PET_OPTIONS, CFG.unfavoritePetTypes, function() persist() end, 2)
+	makeInput(unfav, "Weight Filter (KG)", "0=off | +6 = min 6kg | -6 = max 6kg",
+		function() return tostring(CFG.unfavoriteWeightFilter or 0) end,
+		function(txt) CFG.unfavoriteWeightFilter = tonumber(txt) or 0; persist() end, 3)
+	makeInput(unfav, "Age Filter", "0=off | +50 = min age 50 | -50 = max age 50",
+		function() return tostring(CFG.unfavoriteAgeFilter or 0) end,
+		function(txt) CFG.unfavoriteAgeFilter = tonumber(txt) or 0; persist() end, 4)
 
 	------------------------------------------------------------------ MISC (log & webhooks)
 	local misc = pageRef["Misc"]
@@ -13670,12 +14110,20 @@ return function(ctx)
 
 	-- ESP Label Accordion
 	local espAcc = makeAccordion(pMiscPlayer, "ESP Label (Pet & Egg)", 2, true)
-	makeToggle(espAcc, "Enable ESP Label", "Label melayang di atas pet (nama+berat) & egg (nama+waktu hatch)",
-		function() return CFG.espEnabled end,
+	makeToggle(espAcc, "Enable ESP Eggs", "Floating 3D text nama & waktu hatch egg (tanpa box)",
+		function() return CFG.espEggEnabled end,
 		function(v)
-			CFG.espEnabled = v; persist()
-			if v then ctx.startEsp() else ctx.stopEsp() end
+			CFG.espEggEnabled = v; persist()
+			if ctx.refreshEsp then ctx.refreshEsp()
+			elseif v then ctx.startEsp() else ctx.stopEsp() end
 		end, 1)
+	makeToggle(espAcc, "Enable ESP Pets", "Floating 3D text nama, berat KG & level pet (tanpa box)",
+		function() return CFG.espPetEnabled end,
+		function(v)
+			CFG.espPetEnabled = v; persist()
+			if ctx.refreshEsp then ctx.refreshEsp()
+			elseif v then ctx.startEsp() else ctx.stopEsp() end
+		end, 2)
 
 	-- ESP Base Weight (Inventory) Accordion
 	local espInvAcc = makeAccordion(pMiscPlayer, "ESP Base Weight (Inventory)", 3, false)

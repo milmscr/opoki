@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 43 modul, di-generate 2026-11-07T15:05:35.154Z
+-- 44 modul, di-generate 2026-11-08T04:17:32.487Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -134,6 +134,12 @@ return function(ctx)
 	if CFG.plantSeedEnabled and ctx.startPlant then
 		ctx.startPlant()
 		ctx.log("Auto-resume: Auto Plants ON.")
+	end
+
+	-- auto-resume Auto Ascend kalau sebelumnya aktif
+	if CFG.autoAscendEnabled and ctx.startAscend then
+		ctx.startAscend()
+		ctx.log("Auto-resume: Auto Ascend ON.")
 	end
 
 	-- auto-resume Auto Sprinkler + Shovel Sprinkler
@@ -532,6 +538,7 @@ return function(ctx)
 		plantPosition    = "Random",
 		plantDelay       = 0,
 		plantSeedEnabled = false,
+		autoAscendEnabled = false,
 
 		-- Automation Sprinkler (Farm): pasang + shovel sprinkler
 		sprinklerNames        = {},
@@ -877,6 +884,7 @@ return function(ctx)
 			CFG.plantPosition    = (st.plantPosition == "Player Position") and "Player Position" or "Random"
 			CFG.plantDelay       = tonumber(st.plantDelay) or 0
 			CFG.plantSeedEnabled = st.plantSeedEnabled or false
+			CFG.autoAscendEnabled = st.autoAscendEnabled or false
 			CFG.sprinklerNames        = (type(st.sprinklerNames) == "table") and st.sprinklerNames or {}
 			CFG.sprinklerPlantNames   = (type(st.sprinklerPlantNames) == "table") and st.sprinklerPlantNames or {}
 			CFG.sprinklerPosition     = (st.sprinklerPosition == "Player Position") and "Player Position" or "Random"
@@ -2876,6 +2884,46 @@ return function(ctx)
 	end
 	function ctx.startBuyBeanstalkShop() task.spawn(buyShopLoop) end
 	function ctx.stopBuyBeanstalkShop() ctx.state.beanShopId = (ctx.state.beanShopId or 0) + 1 end
+end
+]=],
+	["modules/farm/automation_ascend.lua"] = [=[
+--[[ automation_ascend.lua — Auto Ascend / BuyRebirth di Farm.
+     Remote: game:GetService("ReplicatedStorage").GameEvents.BuyRebirth:FireServer()
+     Fungsi: ctx.startAscend, ctx.stopAscend, ctx.doAscend.
+     Config: CFG.autoAscendEnabled (boolean). ]]
+return function(ctx)
+	local RS  = game:GetService("ReplicatedStorage")
+	local CFG = ctx.CFG
+
+	local function getRebirthEvent()
+		local ge = RS:FindFirstChild("GameEvents")
+		return ge and ge:FindFirstChild("BuyRebirth")
+	end
+
+	local function doAscend()
+		local event = getRebirthEvent()
+		if event then
+			pcall(function() event:FireServer() end)
+		end
+	end
+	ctx.doAscend = doAscend
+
+	local function ascendLoop(myId)
+		while CFG.autoAscendEnabled and ctx.alive() and ctx.state.ascendId == myId do
+			doAscend()
+			task.wait(2.0)
+		end
+	end
+
+	function ctx.startAscend()
+		ctx.state.ascendId = (ctx.state.ascendId or 0) + 1
+		local myId = ctx.state.ascendId
+		task.spawn(function() ascendLoop(myId) end)
+	end
+
+	function ctx.stopAscend()
+		ctx.state.ascendId = (ctx.state.ascendId or 0) + 1
+	end
 end
 ]=],
 	["modules/farm/automation_collect.lua"] = [=[
@@ -5145,6 +5193,22 @@ return function(ctx)
 	end
 	ctx.hatchDoSell = doSell -- expose buat tombol manual
 
+	local function countPetsToSell()
+		local inv = inventory()
+		local count = 0
+		for _, t in ipairs(petTools()) do
+			local uuid = t:GetAttribute("PET_UUID")
+			local v = inv[uuid]
+			local pt = (v and v.PetType) or t:GetAttribute("f")
+			local pd = v and v.PetData
+			if not isFav(t) and shouldSell(pt, pd) then
+				count = count + 1
+			end
+		end
+		return count
+	end
+	ctx.countPetsToSell = countPetsToSell
+
 	----------------------------------------------------------------- HATCH
 	-- Egg ready = timer habis (TimeToHatch <= 0). Egg yg timer-nya jalan = belum ready.
 	local function readyEggs()
@@ -5539,6 +5603,69 @@ return function(ctx)
 		end)
 	end
 
+	local function sendEggEmptyWebhook(eggName)
+		local url = (CFG.hatchWebhookUrl and CFG.hatchWebhookUrl ~= "" and CFG.hatchWebhookUrl) or CFG.webhookUrl
+		if not url or url == "" or not ctx.sendWebhook then return end
+		local hatched = ctx.state.hatchEggsHatched or 0
+		local rounds = ctx.state.hatchRounds or 0
+		local soldPets = ctx.state.periodSold or 0
+		local sellCycles = ctx.state.hatchSellCycles or 0
+		local payload = {
+			content = ("@everyone ⚠️ **Auto Hatch STOPPED** — Egg `%s` Habis!"):format(tostring(eggName)),
+			embeds = { {
+				title = "🥚 CeszParadise — Egg Out of Stock Alert",
+				color = 16744272,
+				description = ("> **Status :** `Auto Hatch STOPPED (Egg Habis)`\n> Auto Hatch otomatis dihentikan karena stok egg **%s** sudah habis (tidak ada lagi yang di-place) dan pet to sell telah selesai dijual!"):format(tostring(eggName)),
+				fields = {
+					{
+						name = "**Profile :**",
+						value = ("> Username : **%s**\n> Display : **%s**"):format(LP.Name, LP.DisplayName or LP.Name),
+						inline = false,
+					},
+					{
+						name = "**Egg Information :**",
+						value = ("> Egg Name : `%s`\n> Egg in Backpack : `0`\n> Placed in Garden : `0`"):format(tostring(eggName)),
+						inline = false,
+					},
+					{
+						name = "**Session Summary :**",
+						value = ("> Total Hatched : `%d` egg\n> Total Rounds : `%d` cycle\n> Total Sold : `%d` pet (%d sell cycles)\n> Pet to Sell Sisa : `0`"):format(hatched, rounds, soldPets, sellCycles),
+						inline = false,
+					},
+				},
+				footer = {
+					text = ("Server Version: %s\n%s"):format(tostring(game.PlaceVersion), os.date("%B %d | %I:%M %p")),
+					icon_url = "https://raw.githubusercontent.com/milmscr/opoki/main/tegalan/Logo/logo_icon.png",
+				},
+			} },
+		}
+		pcall(function() ctx.sendWebhook(url, payload, ctx) end)
+	end
+
+	local function handleEggEmpty(eggName)
+		if not CFG.hatchEnabled and ctx.state.hatchStatus and ctx.state.hatchStatus:find("Egg Habis") then return end
+		CFG.hatchEnabled = false
+		if ctx.persistState then pcall(ctx.persistState) end
+		ctx.stopHatch()
+		if ctx.ui and ctx.ui.rHatchToggle then
+			pcall(ctx.ui.rHatchToggle)
+		end
+		if ctx.ui and ctx.ui.refreshHatchBar then
+			pcall(ctx.ui.refreshHatchBar)
+		end
+		ctx.state.hatchPhase = "Egg Habis"
+		ctx.state.hatchStatus = ("Auto Hatch STOPPED: Egg '%s' Habis"):format(tostring(eggName))
+		if ctx.log then ctx.log(("Auto Hatch STOPPED: Egg '%s' Habis & pet to sell selesai"):format(tostring(eggName))) end
+		task.spawn(function()
+			sendEggEmptyWebhook(eggName)
+		end)
+	end
+
+	function ctx.testEggEmptyWebhook()
+		local eggName = CFG.hatchEggName or "Rare Egg"
+		sendEggEmptyWebhook(eggName)
+	end
+
 	local function eggAmount(eggName)
 		local n = 0
 		local target = tostring(eggName or ""):lower():match("^%s*(.-)%s*$")
@@ -5850,9 +5977,21 @@ return function(ctx)
 	local function calcKoiPassive(v)
 		local pd = v and v.PetData or {}
 		-- Formula aktual Grow A Garden untuk Fish of Fortune (Koi):
-		-- Chance = (0.22 * Weight + 3)%
+		-- Chance per pet = (0.22 * Weight + 3)% * mutMultiplier, cap per 1 Koi = 10%
 		local w = getPetWeight(pd)
-		return 0.22 * w + 3
+		local mut = pd.MutationType or pd.PetMutation or pd.Mutation
+		local mutMult = 1
+		local MutReg = ctx.deps and ctx.deps.MutReg
+		local EnumToMut = ctx.deps and ctx.deps.EnumToMut
+		local mutName = (EnumToMut and EnumToMut[mut]) or (ctx.reg and ctx.reg.mutDisplay and ctx.reg.mutDisplay(mut)) or tostring(mut or "")
+		if MutReg and MutReg.PetMutationRegistry and mutName ~= "" and mutName ~= "None" and mutName ~= "Normal" then
+			local md = MutReg.PetMutationRegistry[mutName] or MutReg.PetMutationRegistry[mut]
+			if type(md) == "table" then
+				mutMult = tonumber(md.PassiveMultiplier or md.Multiplier or md.PassiveBonus or md.WeightMultiplier or md.Scale) or 1
+			end
+		end
+		local pct = (0.22 * w + 3) * mutMult
+		return math.min(10, pct)
 	end
 
 	local function calcSealPassive(v)
@@ -5867,6 +6006,7 @@ return function(ctx)
 		local inv = inventory()
 		local n, total = 0, 0
 		local PU = ctx.deps and ctx.deps.PU
+		local passiveName = (typeMatch == "Koi") and "Fish of Fortune" or (typeMatch == "Seal" and "Seal the Deal" or typeMatch)
 		for u in pairs(teamSet or {}) do
 			local v = inv[u]
 			if v and tostring(v.PetType):find(typeMatch) then
@@ -5874,15 +6014,32 @@ return function(ctx)
 				local val = nil
 				if PU then
 					pcall(function()
-						if PU.GetPassiveValue then val = PU:GetPassiveValue(v, typeMatch)
-						elseif PU.GetPassiveChance then val = PU:GetPassiveChance(v, typeMatch) end
+						if PU.GetPassiveChance then
+							val = PU:GetPassiveChance(v, passiveName) or PU:GetPassiveChance(v, typeMatch) or PU:GetPassiveChance(v)
+						end
+						if (not val or val <= 0) and PU.GetPassiveValue then
+							val = PU:GetPassiveValue(v, passiveName) or PU:GetPassiveValue(v, typeMatch) or PU:GetPassiveValue(v)
+						end
+						if (not val or val <= 0) and PU.CalculatePassive then
+							val = PU:CalculatePassive(v, passiveName) or PU:CalculatePassive(v, typeMatch) or PU:CalculatePassive(v)
+						end
 					end)
 				end
 				if not tonumber(val) or tonumber(val) <= 0 then
 					val = fallbackCalc(v)
 				end
+				-- 1 Koi maksimal 10%, 1 Seal maksimal 8%
+				if typeMatch == "Koi" and tonumber(val) then
+					val = math.min(10, tonumber(val))
+				elseif typeMatch == "Seal" and tonumber(val) then
+					val = math.min(8, tonumber(val))
+				end
 				total = total + (tonumber(val) or 0)
 			end
+		end
+		-- Cap total team (maksimal 50%)
+		if typeMatch == "Koi" or typeMatch == "Seal" then
+			total = math.min(50, total)
 		end
 		return n, total
 	end
@@ -6175,6 +6332,45 @@ return function(ctx)
 			-- added==0 (mentok) & belum penuh -> anti-stuck: lanjut proses egg yg udah ada
 		end
 
+		-- KONDISI EGG HABIS: tidak ada egg di garden (placed == 0) dan tidak ada egg di backpack (eggAmt <= 0)
+		do
+			local eggName = CFG.hatchEggName or "Rare Egg"
+			local eggAmt = eggAmount(eggName)
+			if placed == 0 and eggAmt <= 0 then
+				local petsToSell = countPetsToSell()
+				if petsToSell > 0 and (ctx.state.emptyEggSellAttempts or 0) < 3 then
+					ctx.state.emptyEggSellAttempts = (ctx.state.emptyEggSellAttempts or 0) + 1
+					ctx.state.pnpBlockedByHatch = true
+					ctx.state.hatchPhase = "Selling Pets (Egg Habis)"
+					ctx.state.hatchStatus = ("Egg habis: menjual %d pet to sell..."):format(petsToSell)
+					if ctx.log then ctx.log(("Egg habis: otomatis menjual %d pet target sell di inventory"):format(petsToSell)) end
+					if next(CFG.hatchSellTeam or {}) and not equipTeam(CFG.hatchSellTeam, "Sell Team", CFG.hatchSellUnequipDelay, CFG.hatchSellEquipDelay) then return end
+					task.wait(CFG.sellTeamDelay or 5.5)
+					local sold = doSell()
+					ctx.state.periodSold = (ctx.state.periodSold or 0) + (tonumber(sold) or 0)
+					ctx.state.sellDoneThisReport = true
+					task.wait(2.0)
+
+					sendCycleStats()
+					ctx.state.hatchPendingReport = false
+					task.wait(0.6)
+
+					-- Jika setelah sell ada egg yang kembali (misal dari Seal the Deal), lanjutkan siklus
+					local recoveredEggAmt = eggAmount(eggName)
+					if recoveredEggAmt > 0 then
+						if ctx.log then ctx.log(("Seal the Deal: %d egg '%s' berhasil direcover, melanjutkan hatch!"):format(recoveredEggAmt, eggName)) end
+						return
+					end
+				end
+
+				-- Jika egg tetap habis (tidak ada lagi yang di-replace) dan pet to sell habis (atau sudah selesai dijual):
+				if placedEggCount() == 0 and eggAmount(eggName) <= 0 and (countPetsToSell() == 0 or (ctx.state.emptyEggSellAttempts or 0) >= 3) then
+					handleEggEmpty(eggName)
+					return
+				end
+			end
+		end
+
 		-- REPORT: garden udah ke-refill (place selesai). Kalau ada report pending dari
 		-- hatch/sell sebelumnya, KIRIM sekarang -> Current Amount = backpack + garden (stabil).
 		if ctx.state.hatchPendingReport then
@@ -6297,6 +6493,7 @@ return function(ctx)
 		ctx.state.hatchReportSellProg = nil
 		ctx.state.hatchSellCycles = 0
 		ctx.state.hatchTiers = {}
+		ctx.state.emptyEggSellAttempts = 0
 		ctx.state.periodHatched = 0
 		ctx.state.periodSold = 0
 		ctx.state.periodHatchRec = 0
@@ -12210,12 +12407,14 @@ return function(ctx)
 			{ id = "care",    name = "Sprinkler & Water" },
 			{ id = "shovel",  name = "Shovel" },
 			{ id = "harvest", name = "Harvest & Fav" },
+			{ id = "ascend",  name = "Ascend" },
 		}, "plants", { hasBottomBar = false, hasInfoLine = false })
 
 		local pFarmPlants  = farmSub.pages["plants"]
 		local pFarmCare    = farmSub.pages["care"]
 		local pFarmShovel  = farmSub.pages["shovel"]
 		local pFarmHarvest = farmSub.pages["harvest"]
+		local pFarmAscend  = farmSub.pages["ascend"]
 
 		-- Automation Plants (fitur aktif): pilih seed + posisi + delay + toggle
 		local plAcc = makeAccordion(pFarmPlants, "Automation Plants", 1, true)
@@ -13165,7 +13364,7 @@ return function(ctx)
 			function(t) CFG.hatchRejoinPlusThreshold = tonumber(t) or 20; persist() end, 7)
 
 		-- START / STOP BAR (PATEN DI BAWAH HATCH PAGE)
-		makeStartStopBar(sub.bottomBarFrame or hatchPage,
+		ctx.ui.refreshHatchBar = makeStartStopBar(sub.bottomBarFrame or hatchPage,
 			function() return CFG.hatchEnabled end,
 			function()
 				CFG.hatchEnabled = true

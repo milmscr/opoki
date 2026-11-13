@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T03:52:30.828Z
+-- 44 modul, di-generate 2026-11-13T10:27:33.671Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -579,6 +579,7 @@ return function(ctx)
 		plantDelay       = 0,
 		plantSeedEnabled = false,
 		autoAscendEnabled = false,
+		ascendDelay      = 2,
 
 		-- Automation Sprinkler (Farm): pasang + shovel sprinkler
 		sprinklerNames        = {},
@@ -993,6 +994,7 @@ return function(ctx)
 			CFG.plantDelay       = tonumber(st.plantDelay) or 0
 			CFG.plantSeedEnabled = st.plantSeedEnabled or false
 			CFG.autoAscendEnabled = st.autoAscendEnabled or false
+			CFG.ascendDelay       = tonumber(st.ascendDelay) or 2
 			CFG.sprinklerNames        = (type(st.sprinklerNames) == "table") and st.sprinklerNames or {}
 			CFG.sprinklerPlantNames   = (type(st.sprinklerPlantNames) == "table") and st.sprinklerPlantNames or {}
 			CFG.sprinklerPosition     = (st.sprinklerPosition == "Player Position") and "Player Position" or "Random"
@@ -1525,7 +1527,7 @@ return function(ctx)
 				bw = 0
 			end
 		end
-		local w1 = bw or 0
+		local w1 = (bw or 0) * 1.1
 		return w1 + 99 * (w1 / 11)
 	end
 
@@ -3181,28 +3183,46 @@ end
 --[[ automation_ascend.lua — Auto Ascend / BuyRebirth di Farm.
      Remote: game:GetService("ReplicatedStorage").GameEvents.BuyRebirth:FireServer()
      Fungsi: ctx.startAscend, ctx.stopAscend, ctx.doAscend.
-     Config: CFG.autoAscendEnabled (boolean). ]]
+     Config: CFG.autoAscendEnabled (boolean), CFG.ascendDelay (number, default 2). ]]
 return function(ctx)
 	local RS  = game:GetService("ReplicatedStorage")
 	local CFG = ctx.CFG
 
 	local function getRebirthEvent()
-		local ge = RS:FindFirstChild("GameEvents")
-		return ge and ge:FindFirstChild("BuyRebirth")
+		local ge = RS:FindFirstChild("GameEvents") or RS:WaitForChild("GameEvents", 2)
+		if ge then
+			local ev = ge:FindFirstChild("BuyRebirth")
+			if ev then return ev end
+			local nested = ge:FindFirstChild("BuyRebirth", true)
+			if nested then return nested end
+		end
+		return RS:FindFirstChild("BuyRebirth", true)
 	end
 
 	local function doAscend()
 		local event = getRebirthEvent()
-		if event then
-			pcall(function() event:FireServer() end)
+		if not event then
+			return false, "Remote BuyRebirth tidak ditemukan"
 		end
+
+		local ok, err
+		if event:IsA("RemoteFunction") then
+			ok, err = pcall(function() return event:InvokeServer() end)
+		else
+			ok, err = pcall(function() event:FireServer() end)
+		end
+		return ok, err
 	end
 	ctx.doAscend = doAscend
 
 	local function ascendLoop(myId)
 		while CFG.autoAscendEnabled and ctx.alive() and ctx.state.ascendId == myId do
-			doAscend()
-			task.wait(2.0)
+			local ok, err = doAscend()
+			if not ok and err and ctx.state.ascendId == myId then
+				task.wait(1.0)
+			end
+			local delaySec = math.max(0.2, tonumber(CFG.ascendDelay) or 2.0)
+			task.wait(delaySec)
 		end
 	end
 
@@ -3609,7 +3629,7 @@ return function(ctx)
 
 		local age = pd.Level or 0
 		local n = math.max(1, tonumber(age) or 1)
-		local w1 = tonumber(pd.BaseWeight) or 0
+		local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 		local w = w1 + (n - 1) * (w1 / 11)
 
 		-- weight filter (+6 = min 6kg, -6 = max 6kg, 0 = off)
@@ -4708,7 +4728,7 @@ return function(ctx)
 				bw = 0
 			end
 		end
-		local w1 = bw or 0
+		local w1 = (bw or 0) * 1.1
 		return w1 + 99 * (w1 / 11)
 	end
 
@@ -5618,7 +5638,7 @@ return function(ctx)
 		pd = pd or {}
 		local age = pd.Level or 0
 		local n = math.max(1, tonumber(age) or 1)
-		local w1 = tonumber(pd.BaseWeight) or 0
+		local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 		local w = w1 + (n - 1) * (w1 / 11)
 		local key = petEggLabel(petType)
 
@@ -6494,7 +6514,7 @@ return function(ctx)
 	-- Helper untuk menghitung Recovery Passive (Koi @ Hatch Team, Seal @ Sell Team)
 	local function getPetWeight(pd)
 		if not pd then return 0 end
-		local w1 = tonumber(pd.BaseWeight) or 0
+		local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 		local lv = math.max(1, tonumber(pd.Level) or 1)
 		return w1 + (lv - 1) * (w1 / 11)
 	end
@@ -8723,13 +8743,21 @@ return function(ctx)
 	end
 
 	-- map Tool.Name -> {base, level} (cuma pet). Dibangun tiap refresh (murah).
+	-- Game menampilkan berat display = BaseWeight * 1.1.
+	local WEIGHT_MULT = 1.1
+
 	local function buildWeightMap()
 		local ok, d = pcall(function() return DataService:GetData() end)
 		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
 		local byUuid = {}
 		for uuid, v in pairs(inv) do
 			local pd = v.PetData or {}
-			if pd.BaseWeight then byUuid[uuid] = { base = pd.BaseWeight, level = pd.Level or 0 } end
+			if pd.BaseWeight then
+				byUuid[uuid] = {
+					base = (tonumber(pd.BaseWeight) or 0) * WEIGHT_MULT,
+					level = tonumber(pd.Level or pd.Age) or 0,
+				}
+			end
 		end
 		local byName = {}
 		local function scan(where)
@@ -8749,34 +8777,59 @@ return function(ctx)
 
 	-- Rumus penambahan weight: Wn = W1 + (n - 1) * (W1 / 11). MAX_LEVEL = umur 500.
 	local MAX_LEVEL   = 500
-	local function floor1(n) return math.floor((tonumber(n) or 0) * 10) / 10 end
-	local function baseKG(bw) return floor1(bw) end
+	local function baseKG(bw) return tonumber(bw) or 0 end
 	local function maxKG(bw)
 		local w1 = tonumber(bw) or 0
-		return floor1(w1 + (MAX_LEVEL - 1) * (w1 / 11))
+		return w1 + (MAX_LEVEL - 1) * (w1 / 11)
 	end
 	local function curKG(bw, lv)
 		local w1 = tonumber(bw) or 0
 		local n = math.max(1, tonumber(lv) or 1)
-		return floor1(w1 + (n - 1) * (w1 / 11))
+		return w1 + (n - 1) * (w1 / 11)
 	end
 
 	-- teks label sesuai mode CFG.espInvMode ("base" / "age" / "max").
-	local function labelText(e)
-		local base = baseKG(e.base)
+	-- Ditampilkan dengan 2 digit di belakang koma (contoh: 38.56 KG / 39.10 KG)
+	local function labelText(e, slotName)
+		local parsedKg = slotName and string.match(slotName, "%[([%d%.]+)%s*[Kk][Gg]%]")
+		local parsedAge = slotName and (
+			string.match(slotName, "%[Usia:?%s*(%d+)%]")
+			or string.match(slotName, "%[Age:?%s*(%d+)%]")
+			or string.match(slotName, "%[%a+:?%s*(%d+)%]")
+		)
+
 		local mode = ctx.CFG.espInvMode
-		if mode == "max" then
-			return ("%.1f \u{2192} %.1f KG"):format(base, maxKG(e.base))
-		elseif mode == "base" then
-			return ("%.1f KG"):format(base)
+		local baseW = e and e.base
+		local lv = (e and e.level and e.level > 0 and e.level) or tonumber(parsedAge) or (e and e.level) or 0
+
+		if (not baseW or baseW == 0) and parsedKg then
+			local n = math.max(1, lv)
+			local cur = tonumber(parsedKg) or 0
+			baseW = cur / (1 + (n - 1) / 11)
 		end
-		return ("%.1f KG A%d"):format(curKG(e.base, e.level), e.level or 0)
+
+		local base = baseKG(baseW or 0)
+		if mode == "max" then
+			return ("%.2f -> %.2f KG"):format(base, maxKG(base))
+		elseif mode == "base" then
+			return ("%.2f KG"):format(base)
+		end
+
+		local displayCurKg
+		if parsedKg then
+			displayCurKg = tonumber(parsedKg) or curKG(base, lv)
+		else
+			displayCurKg = curKG(base, lv)
+		end
+
+		return ("%.2f KG A%d"):format(displayCurKg, lv)
 	end
 
 	-- tempel/refresh label di slot; hapus dari slot non-pet.
-	local function setLabel(slot, e)
+	local function setLabel(slot, e, slotName)
 		local lbl = slot:FindFirstChild(LBL_NAME)
-		if not e then
+		local hasPetInfo = e or (slotName and string.match(slotName, "%[([%d%.]+)%s*[Kk][Gg]%]"))
+		if not hasPetInfo then
 			if lbl then lbl:Destroy() end
 			return
 		end
@@ -8809,7 +8862,7 @@ return function(ctx)
 			con.Parent = lbl
 			lbl.Parent = slot
 		end
-		lbl.Text = labelText(e)
+		lbl.Text = labelText(e, slotName)
 	end
 
 	local function clearAll()
@@ -8832,7 +8885,7 @@ return function(ctx)
 				if slot:IsA("GuiButton") then
 					local tn = slot:FindFirstChild("ToolName")
 					local name = tn and tn:IsA("TextLabel") and tn.Text or nil
-					setLabel(slot, name and byName[name] or nil)
+					setLabel(slot, name and byName[name] or nil, name)
 				end
 			end
 		end
@@ -9032,7 +9085,7 @@ return function(ctx)
 									local lines = { ("<font color='#FF87CD'><b>🐾 %s</b></font>"):format(tostring(pt)) }
 									if bw then
 										local n = math.max(1, lv)
-										local curW = bw + (n - 1) * (bw / 11)
+										local curW = (bw + (n - 1) * (bw / 11)) * WEIGHT_MULT
 										lines[#lines + 1] = ("<font color='#FFD7F0'>%.2f KG</font> <font color='#FFB4CD'>[Lv.%d]</font>"):format(curW, lv)
 									end
 									if mut and mut ~= "" and mut ~= "Normal" and mut ~= "m" then
@@ -10604,7 +10657,7 @@ return function(ctx)
 			if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
 			local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and (tostring(mutName) .. " ") or ""
 			local n = math.max(1, tonumber(age) or 1)
-			local w1 = tonumber(pd.BaseWeight) or 0
+			local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 			local weight = w1 + (n - 1) * (w1 / 11)
 			local tag = eqSet[uuid] and " [aktif]" or ""
 			out[#out + 1] = {
@@ -10647,7 +10700,7 @@ return function(ctx)
 				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
 				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
 				local n = math.max(1, tonumber(age) or 1)
-				local w1 = tonumber(pd.BaseWeight) or 0
+				local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 				local weight = w1 + (n - 1) * (w1 / 11)
 				out[#out + 1] = {
 					value = uuid,
@@ -10690,7 +10743,7 @@ return function(ctx)
 				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
 				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
 				local n = math.max(1, tonumber(age) or 1)
-				local w1 = tonumber(pd.BaseWeight) or 0
+				local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
 				local weight = w1 + (n - 1) * (w1 / 11)
 				out[#out + 1] = {
 					value = uuid,
@@ -13147,6 +13200,41 @@ return function(ctx)
 		makeToggle(recAcc, "Auto Reclaimer Plants", "Auto reclaim plant terpilih pakai tool Reclaimer",
 			function() return CFG.reclaimEnabled end,
 			function(v) CFG.reclaimEnabled = v; persist(); if v and ctx.startReclaim then ctx.startReclaim() end end, 2)
+
+		-- =================== FARM ASCEND ===================
+		local ascAcc = makeAccordion(pFarmAscend, "Automation Ascend / Rebirth", 1, true)
+		makeToggle(ascAcc, "Auto Ascend", "Auto beli Rebirth / Ascend secara berkala di Farm.",
+			function() return CFG.autoAscendEnabled end,
+			function(v)
+				CFG.autoAscendEnabled = v
+				persist()
+				if v then
+					if ctx.startAscend then ctx.startAscend() end
+				else
+					if ctx.stopAscend then ctx.stopAscend() end
+				end
+			end, 1)
+
+		makeInput(ascAcc, "Ascend Interval", "Jeda waktu (detik) antar request Rebirth (minimal 0.2s).",
+			function() return tostring(CFG.ascendDelay or 2) end,
+			function(t)
+				local num = tonumber(t) or 2
+				if num < 0.2 then num = 0.2 end
+				CFG.ascendDelay = num
+				persist()
+			end, 2)
+
+		makeButton(ascAcc, "Ascend Now (Once)", "Kirim request BuyRebirth 1 kali sekarang.",
+			function()
+				if ctx.doAscend then
+					local ok, err = ctx.doAscend()
+					if ok then
+						if ctx.notify then ctx.notify("BuyRebirth berhasil dikirim!") end
+					else
+						if ctx.notify then ctx.notify("Gagal: " .. tostring(err or "Remote error")) end
+					end
+				end
+			end, 3)
 	end
 
 	------------------------------------------------------------------ FLOW (pipeline batch per-step)

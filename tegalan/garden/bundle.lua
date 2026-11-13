@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T13:37:14.827Z
+-- 44 modul, di-generate 2026-11-13T17:07:25.124Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -10603,28 +10603,13 @@ return function(ctx)
 
 	local cdMap = ctx.state.cdMap or {}
 	ctx.state.cdMap = cdMap
-	local READY_TH = 0.05
+	local READY_TH = 0
 
-	local GameEvents = RS:WaitForChild("GameEvents")
-	local GetPetCooldown = GameEvents:WaitForChild("GetPetCooldown")
-	local PetCooldownsUpdated = GameEvents:FindFirstChild("PetCooldownsUpdated")
+	local GetPetCooldown = RS:WaitForChild("GameEvents"):WaitForChild("GetPetCooldown")
 
-	local function formatUuid(u)
-		if not u then return "" end
-		u = tostring(u)
-		if u:sub(1, 1) == "{" and u:sub(-1) == "}" then
-			return u
-		end
-		return "{" .. u:gsub("[{}]", "") .. "}"
-	end
-
-	local function cleanUuid(u)
-		if not u then return "" end
-		return tostring(u):lower():gsub("[{}]", "")
-	end
-
-	local function computeMainCd(cd)
-		if type(cd) ~= "table" then return nil end
+	local function readMainCd(uuid)
+		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
+		if not ok or type(cd) ~= "table" then return nil end
 		local data, mainCd = {}, 0
 		for _, e in ipairs(cd) do
 			local t = tonumber(e.Time) or 0
@@ -10633,55 +10618,8 @@ return function(ctx)
 				if t > mainCd then mainCd = t end
 			end
 		end
-		return mainCd, data
-	end
-
-	-- cdLive: cd real-time per pet (di-index dengan cleanUuid)
-	local cdLive = ctx.state.pnpCdLive or {}
-	ctx.state.pnpCdLive = cdLive
-
-	local function setCd(rawUuid, val, data)
-		local key = cleanUuid(rawUuid)
-		if key ~= "" then
-			cdLive[key] = val
-			if data then cdMap[key] = { data = data } end
-		end
-	end
-
-	local function getCd(rawUuid)
-		local key = cleanUuid(rawUuid)
-		return cdLive[key]
-	end
-
-	if PetCooldownsUpdated then
-		local g = (getgenv and getgenv()) or _G
-		if g.__pnpV1CdConn then pcall(function() g.__pnpV1CdConn:Disconnect() end) end
-		g.__pnpV1CdConn = PetCooldownsUpdated.OnClientEvent:Connect(function(uuid, cdTable)
-			if type(uuid) ~= "string" then return end
-			local m, data = computeMainCd(cdTable)
-			if m ~= nil then
-				setCd(uuid, m, data)
-			end
-		end)
-	end
-
-	local function seedCd(uuid)
-		local fUuid = formatUuid(uuid)
-		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(fUuid) end)
-		if not ok or type(cd) ~= "table" then
-			ok, cd = pcall(function() return GetPetCooldown:InvokeServer(cleanUuid(uuid)) end)
-		end
-		local m, data = computeMainCd(ok and cd or nil)
-		if m ~= nil then
-			setCd(uuid, m, data)
-		end
-		return m
-	end
-
-	local function readMainCd(uuid)
-		local cd = getCd(uuid)
-		if cd ~= nil then return cd end
-		return seedCd(uuid)
+		cdMap[uuid] = { data = data }
+		return mainCd
 	end
 
 	local function targetPets()
@@ -10692,18 +10630,9 @@ return function(ctx)
 		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
 		if not eq then return out end
 		local sel = CFG.pnpUuids or {}
-		local hasSel = (next(sel) ~= nil)
-		local selClean = {}
-		if hasSel then
-			for u, active in pairs(sel) do
-				if active then selClean[cleanUuid(u)] = true end
-			end
-		end
 		for _, uuid in ipairs(eq) do
-			local cu = cleanUuid(uuid)
-			local invData = inv and (inv[uuid] or inv[cu] or inv[formatUuid(uuid)])
-			local pt = invData and invData.PetType
-			if (not hasSel) or selClean[cu] then
+			local pt = inv and inv[uuid] and inv[uuid].PetType
+			if (not next(sel)) or sel[uuid] then
 				out[#out + 1] = { uuid = uuid, petType = pt }
 			end
 		end
@@ -10727,9 +10656,7 @@ return function(ctx)
 			local mutName = mut
 			if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
 			local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and (tostring(mutName) .. " ") or ""
-			local n = math.max(1, tonumber(age) or 1)
-			local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
-			local weight = w1 + (n - 1) * (w1 / 11)
+			local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
 			local tag = eqSet[uuid] and " [aktif]" or ""
 			out[#out + 1] = {
 				value = uuid,
@@ -10754,92 +10681,6 @@ return function(ctx)
 		return out
 	end
 
-	-- daftar pet FAVORITE dari INVENTORY buat Team dropdown
-	function ctx.inventoryPetOptionsFavorite(selectedSet)
-		local out = {}
-		local ok, d = pcall(function() return DataService:GetData() end)
-		if not ok or not d then return out end
-		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
-		if not inv then return out end
-		for uuid, v in pairs(inv) do
-			local pd = v.PetData or {}
-			if pd.IsFavorite then
-				local pt = v.PetType or "?"
-				local age = pd.Level or 0
-				local mut = pd.MutationType
-				local mutName = mut
-				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
-				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
-				local n = math.max(1, tonumber(age) or 1)
-				local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
-				local weight = w1 + (n - 1) * (w1 / 11)
-				out[#out + 1] = {
-					value = uuid,
-					display = ("%s%s | Age %s | %.2f KG"):format(mutPrefix, pt, tostring(age), weight),
-				}
-			end
-		end
-		if selectedSet and next(inv) then
-			local valid = {}
-			for uuid in pairs(inv) do valid[uuid] = true end
-			local changed = false
-			for u in pairs(selectedSet) do
-				if not valid[u] then selectedSet[u] = nil; changed = true end
-			end
-			if changed and ctx.persistState then ctx.persistState() end
-		end
-		table.sort(out, function(a, b)
-			local selA = selectedSet and selectedSet[a.value] and 1 or 0
-			local selB = selectedSet and selectedSet[b.value] and 1 or 0
-			if selA ~= selB then return selA > selB end
-			return a.display < b.display
-		end)
-		return out
-	end
-
-	-- daftar pet NON-FAVORITE dari INVENTORY buat target GBXP
-	function ctx.inventoryPetOptionsNonFavorite(selectedSet)
-		local out = {}
-		local ok, d = pcall(function() return DataService:GetData() end)
-		if not ok or not d then return out end
-		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
-		if not inv then return out end
-		for uuid, v in pairs(inv) do
-			local pd = v.PetData or {}
-			if not pd.IsFavorite then
-				local pt = v.PetType or "?"
-				local age = pd.Level or 0
-				local mut = pd.MutationType
-				local mutName = mut
-				if mut and ctx.reg and ctx.reg.mutDisplay then mutName = ctx.reg.mutDisplay(mut) end
-				local mutPrefix = (mut and mut ~= "" and mut ~= "Normal") and ("[" .. tostring(mutName) .. "] ") or ""
-				local n = math.max(1, tonumber(age) or 1)
-				local w1 = (tonumber(pd.BaseWeight) or 0) * 1.1
-				local weight = w1 + (n - 1) * (w1 / 11)
-				out[#out + 1] = {
-					value = uuid,
-					display = ("%s%s | Age %s | %.2f KG"):format(mutPrefix, pt, tostring(age), weight),
-				}
-			end
-		end
-		if selectedSet and next(inv) then
-			local valid = {}
-			for uuid in pairs(inv) do valid[uuid] = true end
-			local changed = false
-			for u in pairs(selectedSet) do
-				if not valid[u] then selectedSet[u] = nil; changed = true end
-			end
-			if changed and ctx.persistState then ctx.persistState() end
-		end
-		table.sort(out, function(a, b)
-			local selA = selectedSet and selectedSet[a.value] and 1 or 0
-			local selB = selectedSet and selectedSet[b.value] and 1 or 0
-			if selA ~= selB then return selA > selB end
-			return a.display < b.display
-		end)
-		return out
-	end
-
 	local GetFarm = require(RS.Modules.GetFarm)
 	local function placePos()
 		local farm = GetFarm and GetFarm(LP)
@@ -10850,112 +10691,47 @@ return function(ctx)
 		return hrp and hrp.Position or nil
 	end
 
-	-- Fungsi untuk memberi posisi unik per pet (mencegah tumpang tindih)
-	local function getUniquePos(basePos, uuid)
-		-- Ambil angka dari UUID agar posisinya konsisten untuk pet tersebut
-		local hash = 0
-		local str = cleanUuid(uuid)
-		for i = 1, #str do hash = (hash + string.byte(str, i)) % 360 end
-
-		-- Sebar melingkar dengan radius 3-8 studs
-		local radius = 3 + (hash % 6)
-		local angle = math.rad(hash)
-
-		local offsetX = math.cos(angle) * radius
-		local offsetZ = math.sin(angle) * radius
-
-		return basePos + Vector3.new(offsetX, 0, offsetZ)
-	end
-
-	----------------------------------------------------------------- loop (TRUE PARALLEL + ANTI COLLISION)
+	----------------------------------------------------------------- loop (polling, paralel per-pet)
 	local petThreads = {}
-	local lastPlace = {}
-
-	-- KITA TIDAK PAKAI GLOBAL LOCK, TETAP PARALLEL
 	local function runPetThread(uuid, myId)
-		local cu = cleanUuid(uuid)
-		petThreads[cu] = true
-		if getCd(uuid) == nil then seedCd(uuid) end
-
+		petThreads[uuid] = true
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
-				if cleanUuid(p.uuid) == cu then stillTarget = true; break end
+				if p.uuid == uuid then stillTarget = true; break end
 			end
 			if not stillTarget then break end
 
-			local cd = getCd(uuid)
-			if cd == nil then cd = seedCd(uuid) end
-			local basePos = placePos()
-
-			-- Cek cooldown (threshold 0.05) & pastikan tidak spam PnP di detik yang sama
-			if basePos and cd ~= nil and cd <= 0.05 and (os.clock() - (lastPlace[cu] or 0)) > 0.2 then
-
-				-- Jeda sedikit setelah pet ready sebelum pick up (misal 0.01s)
-				local userDelay = tonumber(CFG.pickupDelay)
-				local delayReady = (userDelay and userDelay > 0) and userDelay or 0.01
-				task.wait(delayReady)
-
+			local mainCd = readMainCd(uuid)
+			local pos = placePos()
+			if pos and mainCd ~= nil and mainCd <= READY_TH then
+				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-
-				-- 1. FORMAT UUID (Wajib pakai kurawal seperti Cobalt)
-				local formattedUuid = formatUuid(uuid)
-
-				-- 2. UNEQUIP
-				pcall(function() PetsService:FireServer("UnequipPet", formattedUuid) end)
-
-				-- 3. JEDA 0.05s (Beri nafas server sebelum di-Equip)
-				local eqDelay = tonumber(CFG.equipDelay)
-				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
-				task.wait(eqDelay)
-
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-
-				-- 4. EQUIP (Posisi unik + Format CFrame Cobalt)
-				local finalPos = getUniquePos(basePos, uuid)
-
-				-- Format CFrame persis Cobalt (1,0,0, 0,1,0, 0,0,1)
-				local cf = CFrame.new(
-					finalPos.X, finalPos.Y, finalPos.Z, 
-					1, 0, 0, 
-					0, 1, 0, 
-					0, 0, 1
-				)
-
-				pcall(function() PetsService:FireServer("EquipPet", formattedUuid, cf) end)
-
-				-- 5. JEDA 0.1s setelah Equip agar skill memicu sebelum dicek lagi
-				task.wait(0.1)
-
-				lastPlace[cu] = os.clock()
+				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 			end
-
-			-- Cek cooldown setiap 1 frame (16ms)
-			task.wait()
+			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
 		end
-		petThreads[cu] = nil
+		petThreads[uuid] = nil
 	end
 
 	local function pnpLoop()
 		ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1
 		local myId = ctx.state.pnpV1Id
 		ctx.elevate()
-
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
 			local pets = targetPets()
 			if #pets == 0 then
 				setStatus("PNP V1: tidak ada pet target (equip pet dulu)")
 			else
-				-- Spawn thread untuk SETIAP pet secara independen
 				for _, p in ipairs(pets) do
-					local cu = cleanUuid(p.uuid)
-					if not petThreads[cu] then 
-						task.spawn(runPetThread, p.uuid, myId) 
-					end
+					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
 				end
-				setStatus(("PNP V1 (Parallel): %d pet"):format(#pets))
+				setStatus(("PNP V1 (polling): %d pet"):format(#pets))
 			end
-			task.wait(0.5) -- Cek daftar target tiap 0.5s
+			task.wait(1)
 		end
 	end
 
@@ -10980,25 +10756,11 @@ return function(ctx)
 
 	local cdMap = ctx.state.cdMap or {}
 	ctx.state.cdMap = cdMap
-	local READY_TH = 0.05
+	local READY_TH = 0
 
 	local GameEvents = RS:WaitForChild("GameEvents")
 	local GetPetCooldown = GameEvents:WaitForChild("GetPetCooldown")           -- seed awal
 	local PetCooldownsUpdated = GameEvents:WaitForChild("PetCooldownsUpdated") -- push cd real-time
-
-	local function formatUuid(u)
-		if not u then return "" end
-		u = tostring(u)
-		if u:sub(1, 1) == "{" and u:sub(-1) == "}" then
-			return u
-		end
-		return "{" .. u:gsub("[{}]", "") .. "}"
-	end
-
-	local function cleanUuid(u)
-		if not u then return "" end
-		return tostring(u):lower():gsub("[{}]", "")
-	end
 
 	local function computeMainCd(cd)
 		if type(cd) ~= "table" then return nil end
@@ -11014,45 +10776,21 @@ return function(ctx)
 	end
 
 	-- cdLive: cd real-time per pet, di-update oleh event PetCooldownsUpdated (server push).
-	local cdLive = ctx.state.pnpV2CdLive or {}
+	local cdLive = {}
 	ctx.state.pnpV2CdLive = cdLive
-
-	local function setCd(rawUuid, val, data)
-		local key = cleanUuid(rawUuid)
-		if key ~= "" then
-			cdLive[key] = val
-			if data then cdMap[key] = { data = data } end
-		end
-	end
-
-	local function getCd(rawUuid)
-		local key = cleanUuid(rawUuid)
-		return cdLive[key]
-	end
-
 	do
 		local g = (getgenv and getgenv()) or _G
 		if g.__pnpV2CdConn then pcall(function() g.__pnpV2CdConn:Disconnect() end) end
 		g.__pnpV2CdConn = PetCooldownsUpdated.OnClientEvent:Connect(function(uuid, cdTable)
 			if type(uuid) ~= "string" then return end
 			local m, data = computeMainCd(cdTable)
-			if m ~= nil then
-				setCd(uuid, m, data)
-			end
+			if m ~= nil then cdLive[uuid] = m; cdMap[uuid] = { data = data } end
 		end)
 	end
-
 	local function seedCd(uuid)
-		local fUuid = formatUuid(uuid)
-		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(fUuid) end)
-		if not ok or type(cd) ~= "table" then
-			ok, cd = pcall(function() return GetPetCooldown:InvokeServer(cleanUuid(uuid)) end)
-		end
+		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
 		local m, data = computeMainCd(ok and cd or nil)
-		if m ~= nil then
-			setCd(uuid, m, data)
-		end
-		return m
+		if m ~= nil then cdLive[uuid] = m; cdMap[uuid] = { data = data } end
 	end
 
 	local function targetPets()
@@ -11063,18 +10801,9 @@ return function(ctx)
 		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
 		if not eq then return out end
 		local sel = CFG.pnpV2Uuids or {}
-		local hasSel = (next(sel) ~= nil)
-		local selClean = {}
-		if hasSel then
-			for u, active in pairs(sel) do
-				if active then selClean[cleanUuid(u)] = true end
-			end
-		end
 		for _, uuid in ipairs(eq) do
-			local cu = cleanUuid(uuid)
-			local invData = inv and (inv[uuid] or inv[cu] or inv[formatUuid(uuid)])
-			local pt = invData and invData.PetType
-			if (not hasSel) or selClean[cu] then
+			local pt = inv and inv[uuid] and inv[uuid].PetType
+			if (not next(sel)) or sel[uuid] then
 				out[#out + 1] = { uuid = uuid, petType = pt }
 			end
 		end
@@ -11091,88 +10820,33 @@ return function(ctx)
 		return hrp and hrp.Position or nil
 	end
 
-	-- Fungsi untuk memberi posisi unik per pet (mencegah tumpang tindih)
-	local function getUniquePos(basePos, uuid)
-		-- Ambil angka dari UUID agar posisinya konsisten untuk pet tersebut
-		local hash = 0
-		local str = cleanUuid(uuid)
-		for i = 1, #str do hash = (hash + string.byte(str, i)) % 360 end
-
-		-- Sebar melingkar dengan radius 3-8 studs
-		local radius = 3 + (hash % 6)
-		local angle = math.rad(hash)
-
-		local offsetX = math.cos(angle) * radius
-		local offsetZ = math.sin(angle) * radius
-
-		return basePos + Vector3.new(offsetX, 0, offsetZ)
-	end
-
-	----------------------------------------------------------------- loop (TRUE PARALLEL + ANTI COLLISION)
+	----------------------------------------------------------------- loop (event-driven, paralel per-pet)
 	local petThreads = {}
 	local lastPlace = {}
 	local function runPetThread(uuid, myId)
-		local cu = cleanUuid(uuid)
-		petThreads[cu] = true
-		if getCd(uuid) == nil then seedCd(uuid) end
-
+		petThreads[uuid] = true
+		if cdLive[uuid] == nil then seedCd(uuid) end
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
-				if cleanUuid(p.uuid) == cu then stillTarget = true; break end
+				if p.uuid == uuid then stillTarget = true; break end
 			end
 			if not stillTarget then break end
 
-			local cd = getCd(uuid)
-			if cd == nil then cd = seedCd(uuid) end
-			local basePos = placePos()
-
-			-- Cek cooldown (threshold 0.05) & pastikan tidak spam PnP di detik yang sama
-			if basePos and cd ~= nil and cd <= 0.05 and (os.clock() - (lastPlace[cu] or 0)) > 0.2 then
-
-				-- Jeda sedikit setelah pet ready sebelum pick up (misal 0.01s)
-				local userDelay = tonumber(CFG.pnpV2PickupDelay)
-				local delayReady = (userDelay and userDelay > 0) and userDelay or 0.01
-				task.wait(delayReady)
-
+			local cd = cdLive[uuid]
+			local pos = placePos()
+			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+				if (CFG.pnpV2PickupDelay or 0) > 0 then task.wait(CFG.pnpV2PickupDelay) end
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-
-				-- 1. FORMAT UUID (Wajib pakai kurawal seperti Cobalt)
-				local formattedUuid = formatUuid(uuid)
-
-				-- 2. UNEQUIP
-				pcall(function() PetsService:FireServer("UnequipPet", formattedUuid) end)
-
-				-- 3. JEDA 0.05s (Beri nafas server sebelum di-Equip)
-				local eqDelay = tonumber(CFG.pnpV2EquipDelay)
-				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
-				task.wait(eqDelay)
-
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				task.wait(math.max(0.01, CFG.pnpV2EquipDelay or 0.03))
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-
-				-- 4. EQUIP (Posisi unik + Format CFrame Cobalt)
-				local finalPos = getUniquePos(basePos, uuid)
-
-				-- Format CFrame persis Cobalt (1,0,0, 0,1,0, 0,0,1)
-				local cf = CFrame.new(
-					finalPos.X, finalPos.Y, finalPos.Z, 
-					1, 0, 0, 
-					0, 1, 0, 
-					0, 0, 1
-				)
-
-				pcall(function() PetsService:FireServer("EquipPet", formattedUuid, cf) end)
-
-				-- 5. JEDA 0.1s setelah Equip agar skill memicu sebelum dicek lagi
-				task.wait(0.1)
-
-				lastPlace[cu] = os.clock()
+				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+				lastPlace[uuid] = os.clock()
 			end
-
-			-- Cek cooldown setiap 1 frame (16ms)
-			task.wait()
+			task.wait(math.max(0.02, tonumber(CFG.pnpV2ScanInterval) or 0.05))
 		end
-		petThreads[cu] = nil
+		petThreads[uuid] = nil
 	end
 
 	local function pnpLoop()
@@ -11185,14 +10859,11 @@ return function(ctx)
 				setStatus("PNP V2: tidak ada pet target (equip pet dulu)")
 			else
 				for _, p in ipairs(pets) do
-					local cu = cleanUuid(p.uuid)
-					if not petThreads[cu] then 
-						task.spawn(runPetThread, p.uuid, myId) 
-					end
+					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
 				end
-				setStatus(("PNP V2 (Parallel): %d pet"):format(#pets))
+				setStatus(("PNP V2 (event-driven): %d pet"):format(#pets))
 			end
-			task.wait(0.5)
+			task.wait(1)
 		end
 	end
 

@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T02:54:20.997Z
+-- 44 modul, di-generate 2026-11-13T03:52:30.828Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -456,6 +456,7 @@ return function(ctx)
 		-- Tab TARGET / GBXP Node Hub settings
 		growthTargetUuids      = {}, -- Target pet UUIDs terpilih (Non Favorite)
 		growthTargetTypes      = {}, -- Target pet types terpilih (Non Favorite)
+		growthTargetSource     = "types", -- "types" (by PetType) atau "inventory" (by Inventory UUIDs)
 		growthTargetKg         = 38.45, -- Target berat (KG at age 100)
 		growthMode             = "universal", -- "universal" (massal) atau "single" (1 per 1)
 		growthEquipAge         = 50,
@@ -885,6 +886,7 @@ return function(ctx)
 			CFG.growthFlow     = (type(st.growthFlow) == "table") and st.growthFlow or { "elephant", "mutation", "leveling" }
 			CFG.growthTargetUuids  = (type(st.growthTargetUuids) == "table") and st.growthTargetUuids or (type(st.gbxpPetUuids) == "table" and st.gbxpPetUuids or {})
 			CFG.growthTargetTypes  = migratePetSet(st.growthTargetTypes)
+			CFG.growthTargetSource = (st.growthTargetSource == "inventory" or st.growthTargetSource == "types") and st.growthTargetSource or "types"
 			CFG.growthTargetKg     = tonumber(st.growthTargetKg) or 38.45
 			CFG.growthMode         = (st.growthMode == "single" or st.growthMode == "universal") and st.growthMode or "universal"
 			CFG.growthEquipAge     = tonumber(st.growthEquipAge) or 50
@@ -4712,7 +4714,7 @@ return function(ctx)
 
 	----------------------------------------------------------------- Helper Koleksi Kandidat Pet Target
 	local function getTargetCandidates(inv)
-		local mode = (CFG.growthMode == "single") and "single" or "universal"
+		local source = CFG.growthTargetSource or "types"
 		local hasSpecificUuids = CFG.growthTargetUuids and next(CFG.growthTargetUuids)
 		local hasSpecificTypes = CFG.growthTargetTypes and next(CFG.growthTargetTypes)
 		local targetKg = tonumber(CFG.growthElephantKgMax) or tonumber(CFG.growthTargetKg) or 38.45
@@ -4723,18 +4725,18 @@ return function(ctx)
 			local pd = v.PetData
 			if pd and not isFav(pd) then
 				local isMatch = false
-				if mode == "single" then
+				if source == "inventory" then
 					if hasSpecificUuids then
 						if CFG.growthTargetUuids[uuid] then isMatch = true end
 					else
-						-- Fallback Single: ambil 1 pet unfavorite
+						-- Fallback: jika inventory kosong, ambil semua unfavorite
 						isMatch = true
 					end
-				else -- mode == "universal"
+				else -- source == "types"
 					if hasSpecificTypes then
 						if matchesType(CFG.growthTargetTypes, v.PetType, pd) then isMatch = true end
 					else
-						-- Fallback Universal: ambil semua pet unfavorite di inventory
+						-- Fallback: jika tipe kosong, ambil semua unfavorite
 						isMatch = true
 					end
 				end
@@ -4744,8 +4746,8 @@ return function(ctx)
 					table.insert(list, {
 						uuid = uuid,
 						assumedKg = assumedKg,
-						level = pd.Level or 0,
-						weight = pd.BaseWeight or 0,
+						level = tonumber(pd.Level or pd.Age) or 0,
+						weight = tonumber(pd.BaseWeight) or 0,
 						petType = v.PetType or "Unknown",
 						mutation = pd.MutationType,
 						isLulus = (assumedKg >= targetKg),
@@ -4899,11 +4901,10 @@ return function(ctx)
 
 		-- Cek apakah SEMUA kandidat pet sudah LULUS (KG >= targetKg)
 		local allTargetDone = true
-		local pendingBoostCount = 0
 		for _, c in ipairs(candidates) do
 			if not c.isLulus then
 				allTargetDone = false
-				pendingBoostCount = pendingBoostCount + 1
+				break
 			end
 		end
 
@@ -4912,20 +4913,19 @@ return function(ctx)
 		end
 
 		-------------------------------------------------------------
-		-- EKSEKUSI FASE 1: LEVELING (Foreground)
+		-- EKSEKUSI FASE 1: LEVELING
 		-------------------------------------------------------------
 		if ctx.state.growthPhase == "leveling" then
 			ctx.state.growthStep = ("Leveling (Target Age %d)"):format(eleEquipAge)
 			local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
 
-			-- Pasang tim Leveling. Pet target aktif TETAP DI GARDEN (TANPA PICK UP!)
 			local teamReady = syncGardenTeam(levTeam, localEq)
 			if not teamReady then
 				ctx.state.growthStatus = "Leveling: nunggu tim Leveling lengkap..."
 				return
 			end
 
-			-- Cari pet target di inventory yang membutuhkan leveling (Age < eleEquipAge dan belum lulus KG)
+			-- Cari pet target di inventory yang butuh leveling (< eleEquipAge & belum lulus)
 			local needLevelingInInv = {}
 			for _, c in ipairs(candidates) do
 				if not c.isLulus and c.level < eleEquipAge and not localEq[c.uuid] then
@@ -4934,11 +4934,10 @@ return function(ctx)
 			end
 			table.sort(needLevelingInInv, function(a, b) return a.level < b.level end)
 
-			-- Periksa pet target aktif yang saat ini terpasang di garden
+			-- Periksa pet target aktif yang terpasang di garden
 			local activeCount = 0
 			for u in pairs(ctx.state.growthActivePets) do
 				if not localEq[u] then
-					-- Jika pet lepas secara eksternal, pasang lagi
 					local pos = getPos(u)
 					if pos then
 						pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
@@ -4949,41 +4948,87 @@ return function(ctx)
 				activeCount = activeCount + 1
 			end
 
-			-- Isi slot kosong di garden jika activeCount < maxSlots
-			while activeCount < maxSlots and #needLevelingInInv > 0 do
-				local nextPet = table.remove(needLevelingInInv, 1)
-				local u = nextPet.uuid
-				ctx.state.growthActivePets[u] = true
-				ctx.state.growthTrackedPets[u] = {
-					uuid = u,
-					status = "AKTIF",
-					assumedKg = nextPet.assumedKg,
-					level = nextPet.level,
-					weight = nextPet.weight,
-					petType = nextPet.petType,
-					startTime = os.time(),
-				}
-				local pos = getPos(u)
-				if pos then
-					pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
-					localEq[u] = true
-					task.wait(0.15)
+			-- Mode Single: jika slot belum terisi, ambil 1 pet yang belum lulus
+			if mode == "single" then
+				if activeCount == 0 then
+					for _, c in ipairs(candidates) do
+						if not c.isLulus then
+							local u = c.uuid
+							ctx.state.growthActivePets[u] = true
+							ctx.state.growthTrackedPets[u] = {
+								uuid = u,
+								status = "AKTIF",
+								assumedKg = c.assumedKg,
+								level = c.level,
+								weight = c.weight,
+								petType = c.petType,
+								startTime = os.time(),
+							}
+							local pos = getPos(u)
+							if pos then
+								pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+								localEq[u] = true
+								task.wait(0.15)
+							end
+							activeCount = 1
+							break
+						end
+					end
 				end
-				activeCount = activeCount + 1
-			end
 
-			-- ROLLING SWAP DI MODE UNIVERSAL:
-			-- "pick up age 50 > masukin pet age -50 lainnya begitu terus"
-			local swapped = false
-			if mode == "universal" then
+				-- Cek pet single aktif di garden
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
+					local pt = v and v.PetType or "?"
+					if lvl < eleEquipAge then
+						ctx.state.growthStatus = ("Single Leveling: Pet %s Age %d/%d..."):format(pt, lvl, eleEquipAge)
+						return
+					else
+						-- "single = leveling sampai 50 (ada yang udah 50 pindah ke flow selanjutnya)"
+						ctx.state.growthPhase = "elephant"
+						ctx.state.growthStatus = ("Single Leveling selesai! Pet %s mencapai Age %d. Pindah ke Elephant ✓"):format(pt, lvl)
+						return
+					end
+				end
+
+				if activeCount == 0 then
+					ctx.state.growthPhase = "finishing"
+					return
+				end
+
+			else -- Mode Universal
+				-- Isi slot kosong hingga maxSlots
+				while activeCount < maxSlots and #needLevelingInInv > 0 do
+					local nextPet = table.remove(needLevelingInInv, 1)
+					local u = nextPet.uuid
+					ctx.state.growthActivePets[u] = true
+					ctx.state.growthTrackedPets[u] = {
+						uuid = u,
+						status = "AKTIF",
+						assumedKg = nextPet.assumedKg,
+						level = nextPet.level,
+						weight = nextPet.weight,
+						petType = nextPet.petType,
+						startTime = os.time(),
+					}
+					local pos = getPos(u)
+					if pos then
+						pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+						localEq[u] = true
+						task.wait(0.15)
+					end
+					activeCount = activeCount + 1
+				end
+
+				-- ROLLING SWAP: "pick up age 50 > masukin pet age -50 lainnya begitu terus"
+				local swapped = false
 				for u in pairs(ctx.state.growthActivePets) do
 					local v = inv[u]
 					local pd = v and v.PetData
 					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
 					if lvl >= eleEquipAge and #needLevelingInInv > 0 then
-						-- Pet ini sudah mencapai Age 50 (selesai leveling)!
-						-- Masih ada pet di inventory dengan Age < 50:
-						-- Pick up pet Age 50 ini dan masukkan pet Age < 50 dari antrean!
 						pcall(function() PetsService:FireServer("UnequipPet", u) end)
 						localEq[u] = nil
 						releaseSlot(u)
@@ -5011,54 +5056,51 @@ return function(ctx)
 						break
 					end
 				end
-			end
 
-			if swapped then
-				ctx.state.growthStatus = ("Leveling: rotasi pet Age %d -> masukkan pet Age <%d dari antrean..."):format(eleEquipAge, eleEquipAge)
-				return
-			end
-
-			-- Cek status umur seluruh pet aktif di garden
-			local allGardenAgeDone = true
-			local ageLabels = {}
-			for u in pairs(ctx.state.growthActivePets) do
-				local v = inv[u]
-				local pd = v and v.PetData
-				local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
-				table.insert(ageLabels, tostring(lvl) .. "/" .. tostring(eleEquipAge))
-				if lvl < eleEquipAge then
-					allGardenAgeDone = false
+				if swapped then
+					ctx.state.growthStatus = ("Universal Leveling: rotasi pet Age %d -> masukkan pet Age <%d dari antrean..."):format(eleEquipAge, eleEquipAge)
+					return
 				end
-			end
 
-			-- Hitung seluruh pet kandidat yang belum mencapai Age eleEquipAge
-			local totalUnderAge = 0
-			for _, c in ipairs(candidates) do
-				if not c.isLulus and c.level < eleEquipAge then
-					totalUnderAge = totalUnderAge + 1
+				-- Cek status umur seluruh pet aktif di garden
+				local allGardenAgeDone = true
+				local ageLabels = {}
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
+					table.insert(ageLabels, tostring(lvl) .. "/" .. tostring(eleEquipAge))
+					if lvl < eleEquipAge then
+						allGardenAgeDone = false
+					end
 				end
-			end
 
-			-- Jika masih ada pet yang umurnya < eleEquipAge: TETAP DI FASE LEVELING!
-			if totalUnderAge > 0 or not allGardenAgeDone or activeCount == 0 then
-				ctx.state.growthStatus = ("Leveling aktif: umur pet %s (menuju Age %d)..."):format(table.concat(ageLabels, ", "), eleEquipAge)
-				return
-			else
-				-- SEMUA pet target di inventory dan di garden sudah mencapai Age >= eleEquipAge (50)!
-				-- Barulah sekarang beralih ke Fase Elephant!
-				ctx.state.growthPhase = "elephant"
-				ctx.state.growthStatus = ("Leveling selesai! Seluruh target pet mencapai Age %d. Lanjut ke Elephant ✓"):format(eleEquipAge)
-				return
+				-- Hitung seluruh pet kandidat yang belum mencapai Age eleEquipAge
+				local totalUnderAge = 0
+				for _, c in ipairs(candidates) do
+					if not c.isLulus and c.level < eleEquipAge then
+						totalUnderAge = totalUnderAge + 1
+					end
+				end
+
+				-- "universal = leveling semua pet sampai 50 (udah semua? pindah ke flow selanjutnya)"
+				if totalUnderAge > 0 or not allGardenAgeDone or activeCount == 0 then
+					ctx.state.growthStatus = ("Universal Leveling aktif: umur pet %s (menuju Age %d)..."):format(table.concat(ageLabels, ", "), eleEquipAge)
+					return
+				else
+					ctx.state.growthPhase = "elephant"
+					ctx.state.growthStatus = ("Universal Leveling selesai! Seluruh target pet mencapai Age %d. Lanjut ke Elephant ✓"):format(eleEquipAge)
+					return
+				end
 			end
 
 		-------------------------------------------------------------
-		-- EKSEKUSI FASE 2: ELEPHANT (Foreground)
+		-- EKSEKUSI FASE 2: ELEPHANT
 		-------------------------------------------------------------
 		elseif ctx.state.growthPhase == "elephant" then
 			ctx.state.growthStep = "Elephant Boost (+0.11 KG)"
 			local eleTeam = filterFavTeam(CFG.growthElephantTeam, inv)
 
-			-- Pasang tim Elephant. Pet target aktif TETAP DI GARDEN (TANPA PICK UP!)
 			local teamReady = syncGardenTeam(eleTeam, localEq)
 			if not teamReady then
 				ctx.state.growthStatus = "Elephant: nunggu tim Elephant lengkap..."
@@ -5072,68 +5114,76 @@ return function(ctx)
 				end
 			end
 
-			-- Cari pet target di inventory yang siap di-boost (Age >= eleEquipAge dan belum lulus KG)
-			local readyForEleInInv = {}
-			for _, c in ipairs(candidates) do
-				if not c.isLulus and c.level >= eleEquipAge and not localEq[c.uuid] then
-					table.insert(readyForEleInInv, c)
-				end
-			end
+			if mode == "single" then
+				-- Periksa pet single di garden
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
+					local assumed = getAssumedKg100(pd)
 
-			-- Isi slot kosong di garden dengan pet yang siap boost
-			local eleActiveCount = 0
-			for u in pairs(ctx.state.growthActivePets) do
-				eleActiveCount = eleActiveCount + 1
-			end
-			while eleActiveCount < maxSlots and #readyForEleInInv > 0 do
-				local nextPet = table.remove(readyForEleInInv, 1)
-				local u = nextPet.uuid
-				ctx.state.growthActivePets[u] = true
-				ctx.state.growthTrackedPets[u] = {
-					uuid = u,
-					status = "AKTIF",
-					assumedKg = nextPet.assumedKg,
-					level = nextPet.level,
-					weight = nextPet.weight,
-					petType = nextPet.petType,
-					startTime = os.time(),
-				}
-				local pos = getPos(u)
-				if pos then
-					pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
-					localEq[u] = true
-					task.wait(0.15)
-				end
-				eleActiveCount = eleActiveCount + 1
-			end
-
-			-- Periksa hasil boost pada pet aktif di garden
-			for u in pairs(ctx.state.growthActivePets) do
-				local v = inv[u]
-				local pd = v and v.PetData
-				local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
-				if lvl < eleEquipAge then
-					-- Pet ini sudah ter-reset umurnya ke 1 oleh Elephant boost!
-					if mode == "single" then
-						local assumed = getAssumedKg100(pd)
+					if lvl >= eleEquipAge then
+						-- Menanti boost pasif (+0.11 KG, Age reset 1)
+						ctx.state.growthStatus = string.format("[Single Elephant] Menanti boost (+0.11 KG, Age %d -> 1) | KG: %.2f/%.2f...", lvl, assumed, targetKg)
+						return
+					else
+						-- Pet sudah menerima boost (Age < eleEquipAge / Age 1)!
+						-- "single = elephant(udah ada yang 38.45 pindah flow selanjutnya)"
 						if assumed >= targetKg then
-							-- Pet single LULUS! Lepas pet ini, reset slot, kembali ke Leveling untuk pet baru
-							pcall(function() PetsService:FireServer("UnequipPet", u) end)
-							localEq[u] = nil
-							releaseSlot(u)
-							ctx.state.growthActivePets[u] = nil
-							ctx.state.growthPhase = "leveling"
-							ctx.state.growthStatus = string.format("Elephant: Pet LULUS (%.2f KG)! Lanjut pet berikutnya...", assumed)
+							ctx.state.growthPhase = "finishing_leveling"
+							ctx.state.growthStatus = string.format("Single Elephant: LULUS (%.2f KG >= %.2f KG)! Pindah ke finishing leveling...", assumed, targetKg)
 							return
 						else
-							-- Belum lulus, umur sudah 1, langsung kembali ke leveling
+							-- Belum 38.45 -> kembali ke Leveling untuk dinaikkan lagi ke 50!
 							ctx.state.growthPhase = "leveling"
-							ctx.state.growthStatus = string.format("Elephant boost selesai (%.2f KG, Age reset 1) -> kembali ke Leveling...", assumed)
+							ctx.state.growthStatus = string.format("Single Elephant: Boost selesai (%.2f KG, Age reset 1) -> kembali ke Leveling (1 -> %d)...", assumed, eleEquipAge)
 							return
 						end
-					elseif #readyForEleInInv > 0 then
-						-- Mode Universal: ada pet Age >= 50 lain yang menunggu boost di inventory:
-						-- Pick up pet Age 1 dan masukkan pet Age 50 dari inventory!
+					end
+				end
+
+			else -- Mode Universal
+				-- Cari pet target di inventory yang siap boost (Age >= eleEquipAge & belum lulus)
+				local readyForEleInInv = {}
+				for _, c in ipairs(candidates) do
+					if not c.isLulus and c.level >= eleEquipAge and not localEq[c.uuid] then
+						table.insert(readyForEleInInv, c)
+					end
+				end
+
+				-- Isi slot kosong di garden jika ada
+				local eleActiveCount = 0
+				for u in pairs(ctx.state.growthActivePets) do
+					eleActiveCount = eleActiveCount + 1
+				end
+				while eleActiveCount < maxSlots and #readyForEleInInv > 0 do
+					local nextPet = table.remove(readyForEleInInv, 1)
+					local u = nextPet.uuid
+					ctx.state.growthActivePets[u] = true
+					ctx.state.growthTrackedPets[u] = {
+						uuid = u,
+						status = "AKTIF",
+						assumedKg = nextPet.assumedKg,
+						level = nextPet.level,
+						weight = nextPet.weight,
+						petType = nextPet.petType,
+						startTime = os.time(),
+					}
+					local pos = getPos(u)
+					if pos then
+						pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+						localEq[u] = true
+						task.wait(0.15)
+					end
+					eleActiveCount = eleActiveCount + 1
+				end
+
+				-- Rotasi jika ada pet di garden yang sudah ter-boost (Age < 50) dan masih ada pet Age 50 di inventory
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
+					if lvl < eleEquipAge and #readyForEleInInv > 0 then
 						pcall(function() PetsService:FireServer("UnequipPet", u) end)
 						localEq[u] = nil
 						releaseSlot(u)
@@ -5157,84 +5207,147 @@ return function(ctx)
 							localEq[newU] = true
 							task.wait(0.15)
 						end
-						ctx.state.growthStatus = ("Elephant: rotasi pet Age 1 -> masukkan pet Age %d untuk boost..."):format(eleEquipAge)
+						ctx.state.growthStatus = ("Universal Elephant: rotasi pet Age 1 -> masukkan pet Age %d untuk boost..."):format(eleEquipAge)
+						return
+					end
+				end
+
+				-- Cek apakah seluruh pet aktif di garden sudah ter-reset ke Age < eleEquipAge
+				local allResetToAge1 = true
+				local weightLabels = {}
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
+					local assumed = getAssumedKg100(pd)
+					table.insert(weightLabels, string.format("%.2f KG (Age %d)", assumed, lvl))
+					if lvl >= eleEquipAge then
+						allResetToAge1 = false
+					end
+				end
+
+				if not allResetToAge1 then
+					ctx.state.growthStatus = ("[Universal Elephant] Menanti passive boost (+0.11 KG, Age %d -> 1): %s..."):format(eleEquipAge, table.concat(weightLabels, ", "))
+					return
+				else
+					if #readyForEleInInv > 0 then return end
+
+					-- "universal = elephant(semuanya udah 38.45? lanjut flow selanjutnya. ada yang belum? balik ke phase 1)"
+					local allLulus = true
+					for _, c in ipairs(candidates) do
+						if not c.isLulus then allLulus = false break end
+					end
+
+					if allLulus then
+						ctx.state.growthPhase = "finishing_leveling"
+						ctx.state.growthStatus = "Universal Elephant: Seluruh pet telah mencapai target berat! Masuk fase finishing ✓"
+						return
+					else
+						ctx.state.growthPhase = "leveling"
+						ctx.state.growthStatus = ("Universal: Ada pet belum mencapai 38.45 KG -> kembali ke Leveling (1 -> %d)..."):format(eleEquipAge)
 						return
 					end
 				end
 			end
 
-			-- Cek apakah seluruh pet aktif di garden sudah ter-reset ke Age < eleEquipAge
-			local allResetToAge1 = true
-			local weightLabels = {}
+		-------------------------------------------------------------
+		-- EKSEKUSI FASE 3: FINISHING LEVELING
+		-------------------------------------------------------------
+		elseif ctx.state.growthPhase == "finishing_leveling" then
+			ctx.state.growthStep = "Finishing Leveling"
+			local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
+
+			local teamReady = syncGardenTeam(levTeam, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = "Finishing Leveling: nunggu tim Leveling lengkap..."
+				return
+			end
+
+			-- Cek apakah pet di garden sudah mencapai Age >= 2 (status valid game)
+			local allSafeAge = true
 			for u in pairs(ctx.state.growthActivePets) do
 				local v = inv[u]
 				local pd = v and v.PetData
 				local lvl = tonumber(pd and (pd.Level or pd.Age)) or 0
-				local assumed = getAssumedKg100(pd)
-				table.insert(weightLabels, string.format("%.2f KG (Age %d)", assumed, lvl))
-				if lvl >= eleEquipAge then
-					allResetToAge1 = false
+				if lvl < 2 then
+					allSafeAge = false
 				end
 			end
 
-			if not allResetToAge1 then
-				ctx.state.growthStatus = ("[Elephant] Menanti passive boost (+0.11 KG, Age %d -> 1): %s..."):format(eleEquipAge, table.concat(weightLabels, ", "))
+			if not allSafeAge then
+				ctx.state.growthStatus = "Finishing Leveling: menaikkan Age pet ke batas aman (Age 2) sebelum unequip..."
 				return
-			else
-				-- Seluruh pet aktif telah di-boost dan umurnya ter-reset menjadi 1!
-				-- Cek apakah masih ada pet di inventory dengan Age >= eleEquipAge yang belum di-boost:
-				if #readyForEleInInv > 0 then
-					return
+			end
+
+			-- Pet sudah mencapai batas aman!
+			if mode == "single" then
+				-- "single = leveling (udah capai target phase terakhir? ganti pet ulang dari phase 1) loopnya fokus per pet"
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local pt = v and v.PetType or "Unknown"
+					local dur = 0
+					if ctx.state.growthTrackedPets[u] and ctx.state.growthTrackedPets[u].startTime then
+						dur = os.time() - ctx.state.growthTrackedPets[u].startTime
+					end
+					if ctx.webhookElephant and ctx.webhookElephant.sendFinished then
+						pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
+					end
+					pcall(function() PetsService:FireServer("UnequipPet", u) end)
+					localEq[u] = nil
+					releaseSlot(u)
+					ctx.state.growthActivePets[u] = nil
 				end
 
-				-- Periksa apakah seluruh pet kandidat sudah LULUS (KG >= targetKg):
-				local allLulus = true
+				-- Periksa apakah masih ada kandidat pet yang belum lulus di antrean:
+				local nextCandidateExists = false
 				for _, c in ipairs(candidates) do
-					if not c.isLulus then allLulus = false break end
+					if not c.isLulus and not localEq[c.uuid] then
+						nextCandidateExists = true
+						break
+					end
 				end
 
-				if allLulus then
-					ctx.state.growthPhase = "finishing"
-					ctx.state.growthStatus = "Elephant: Seluruh pet telah mencapai target berat! Masuk fase finishing ✓"
+				if nextCandidateExists then
+					ctx.state.growthPhase = "leveling"
+					ctx.state.growthStatus = "Pet lulus & disimpan! Mengambil pet berikutnya dari antrean (ulang dari Leveling Phase 1)..."
 					return
 				else
-					-- Belum semua lulus, dan umur pet sekarang 1 (< 50):
-					-- Otomatis kembali ke Fase Leveling (loop berputar tanpa henti)!
-					ctx.state.growthPhase = "leveling"
-					ctx.state.growthStatus = ("Elephant boost selesai. Umur reset ke 1 -> kembali ke Leveling (menuju Age %d)..."):format(eleEquipAge)
+					ctx.state.growthPhase = "finishing"
 					return
 				end
+
+			else -- Mode Universal
+				-- "universal = leveling ( udah semua sesuai target? oke done)"
+				for u in pairs(ctx.state.growthActivePets) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local pt = v and v.PetType or "Unknown"
+					local dur = 0
+					if ctx.state.growthTrackedPets[u] and ctx.state.growthTrackedPets[u].startTime then
+						dur = os.time() - ctx.state.growthTrackedPets[u].startTime
+					end
+					if ctx.webhookElephant and ctx.webhookElephant.sendFinished then
+						pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
+					end
+					pcall(function() PetsService:FireServer("UnequipPet", u) end)
+					localEq[u] = nil
+					releaseSlot(u)
+					ctx.state.growthActivePets[u] = nil
+				end
+
+				ctx.state.growthPhase = "finishing"
+				return
 			end
 
 		-------------------------------------------------------------
-		-- EKSEKUSI FASE FINISHING & CLEANUP
+		-- EKSEKUSI FASE 4: FINISHING & CLEANUP
 		-------------------------------------------------------------
 		elseif ctx.state.growthPhase == "finishing" then
 			ctx.state.growthStep = "Finishing & Cleanup"
-			ctx.state.growthStatus = "Finishing: membersihkan garden dan menyimpan semua pet target..."
+			ctx.state.growthStatus = "Finishing: membersihkan garden..."
 
-			-- Unequip seluruh pet target di garden
-			for u in pairs(ctx.state.growthActivePets) do
-				local v = inv[u]
-				local pd = v and v.PetData
-				local pt = v and v.PetType or "Unknown"
-				local dur = 0
-				if ctx.state.growthTrackedPets[u] and ctx.state.growthTrackedPets[u].startTime then
-					dur = os.time() - ctx.state.growthTrackedPets[u].startTime
-				end
-				if ctx.webhookElephant and ctx.webhookElephant.sendFinished then
-					pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
-				end
-				if ctx.webhookLeveling and ctx.webhookLeveling.sendFinished then
-					pcall(function() ctx.webhookLeveling.sendFinished(ctx, pt, pd and mutOf(pd), pd and pd.Level or 0, dur, 0) end)
-				end
-				pcall(function() PetsService:FireServer("UnequipPet", u) end)
-				localEq[u] = nil
-				releaseSlot(u)
-				task.wait(0.15)
-			end
-
-			-- Unequip seluruh pet tim aura yang tersisa
+			-- Unequip seluruh pet yang masih terpasang
 			local ok2, d2 = pcall(function() return DataService:GetData() end)
 			local eq2 = (ok2 and d2 and d2.PetsData and d2.PetsData.EquippedPets) or {}
 			for _, u in ipairs(eq2) do
@@ -5246,6 +5359,7 @@ return function(ctx)
 			ctx.state.growthActivePets = {}
 			ctx.state.growthTrackedPets = {}
 			ctx.state.growthPhase = "leveling"
+			CFG.growthEnabled = false
 			ctx.state.growthStatus = "Growth: SEMUA TARGET PET SELESAI ✓"
 			return
 		end
@@ -13102,12 +13216,23 @@ return function(ctx)
 				persist()
 			end, 5)
 
-		-- Mode Switch (Segmented Button "if-else / geser", bukan scrollbar)
+		-- 1. FLOW MODE SWITCH (Segmented Button "if-else / geser")
+		local modeTitle = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 18),
+			BackgroundTransparency = 1,
+			Text = "Flow Mode (Alur Siklus)",
+			Font = F.bold,
+			TextSize = 12,
+			TextColor3 = C.sub,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = 6,
+		}, gTargetAcc)
+
 		local modeSwitchRow = mk("Frame", {
 			Size = UDim2.new(1, 0, 0, 36),
 			BackgroundColor3 = C.bg,
 			BorderSizePixel = 0,
-			LayoutOrder = 6,
+			LayoutOrder = 7,
 		}, gTargetAcc)
 		corner(modeSwitchRow, 8)
 		pad(modeSwitchRow, 4, 4, 4, 4)
@@ -13117,15 +13242,15 @@ return function(ctx)
 			Padding = UDim.new(0, 6),
 		}, modeSwitchRow)
 
-		local isSingle = (CFG.growthMode == "single")
+		local isSingleFlow = (CFG.growthMode == "single")
 
 		local btnSingle = mk("TextButton", {
 			Size = UDim2.new(0.5, -3, 1, 0),
-			BackgroundColor3 = isSingle and C.acc or C.row,
-			Text = "🎯 Single (1 Pet)",
+			BackgroundColor3 = isSingleFlow and C.acc or C.row,
+			Text = "🎯 Single (Fokus 1 Pet)",
 			Font = F.bold,
 			TextSize = 12,
-			TextColor3 = isSingle and Color3.fromRGB(0, 0, 0) or C.txt,
+			TextColor3 = isSingleFlow and Color3.fromRGB(0, 0, 0) or C.txt,
 			AutoButtonColor = false,
 			LayoutOrder = 1,
 		}, modeSwitchRow)
@@ -13133,27 +13258,126 @@ return function(ctx)
 
 		local btnUniversal = mk("TextButton", {
 			Size = UDim2.new(0.5, -3, 1, 0),
-			BackgroundColor3 = (not isSingle) and C.acc or C.row,
+			BackgroundColor3 = (not isSingleFlow) and C.acc or C.row,
 			Text = "🌐 Universal (Massal)",
 			Font = F.bold,
 			TextSize = 12,
-			TextColor3 = (not isSingle) and Color3.fromRGB(0, 0, 0) or C.txt,
+			TextColor3 = (not isSingleFlow) and Color3.fromRGB(0, 0, 0) or C.txt,
 			AutoButtonColor = false,
 			LayoutOrder = 2,
 		}, modeSwitchRow)
 		corner(btnUniversal, 6)
 
-		-- Container Single Mode (Load Pet Inventory Paten)
-		local singleContainer = mk("Frame", {
+		local flowDescLabel = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 28),
+			BackgroundTransparency = 1,
+			Text = isSingleFlow
+				and "ℹ️ Single: Fokus 1 pet (Leveling 50 -> Elephant boost -> Finishing -> Ganti pet baru)"
+				or "ℹ️ Universal: Massal per fase (Leveling semua pet ke 50 -> Elephant boost massal -> Ulang yang belum)",
+			Font = F.regular,
+			TextSize = 11,
+			TextColor3 = Color3.fromRGB(150, 205, 255),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextWrapped = true,
+			LayoutOrder = 8,
+		}, gTargetAcc)
+
+		btnSingle.MouseButton1Click:Connect(function()
+			CFG.growthMode = "single"
+			btnSingle.BackgroundColor3 = C.acc
+			btnSingle.TextColor3 = Color3.fromRGB(0, 0, 0)
+			btnUniversal.BackgroundColor3 = C.row
+			btnUniversal.TextColor3 = C.txt
+			flowDescLabel.Text = "ℹ️ Single: Fokus 1 pet (Leveling 50 -> Elephant boost -> Finishing -> Ganti pet baru)"
+			persist()
+		end)
+
+		btnUniversal.MouseButton1Click:Connect(function()
+			CFG.growthMode = "universal"
+			btnUniversal.BackgroundColor3 = C.acc
+			btnUniversal.TextColor3 = Color3.fromRGB(0, 0, 0)
+			btnSingle.BackgroundColor3 = C.row
+			btnSingle.TextColor3 = C.txt
+			flowDescLabel.Text = "ℹ️ Universal: Massal per fase (Leveling semua pet ke 50 -> Elephant boost massal -> Ulang yang belum)"
+			persist()
+		end)
+
+		-- 2. TARGET PET SOURCE SWITCH (Segmented Button "if-else / geser")
+		local sourceTitle = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 18),
+			BackgroundTransparency = 1,
+			Text = "Target Pet Source (Cara Pilih Pet Target)",
+			Font = F.bold,
+			TextSize = 12,
+			TextColor3 = C.sub,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = 9,
+		}, gTargetAcc)
+
+		local sourceSwitchRow = mk("Frame", {
+			Size = UDim2.new(1, 0, 0, 36),
+			BackgroundColor3 = C.bg,
+			BorderSizePixel = 0,
+			LayoutOrder = 10,
+		}, gTargetAcc)
+		corner(sourceSwitchRow, 8)
+		pad(sourceSwitchRow, 4, 4, 4, 4)
+		mk("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, 6),
+		}, sourceSwitchRow)
+
+		local isSourceInv = (CFG.growthTargetSource == "inventory")
+
+		local btnSourceTypes = mk("TextButton", {
+			Size = UDim2.new(0.5, -3, 1, 0),
+			BackgroundColor3 = (not isSourceInv) and C.acc or C.row,
+			Text = "📋 By Pet Types",
+			Font = F.bold,
+			TextSize = 12,
+			TextColor3 = (not isSourceInv) and Color3.fromRGB(0, 0, 0) or C.txt,
+			AutoButtonColor = false,
+			LayoutOrder = 1,
+		}, sourceSwitchRow)
+		corner(btnSourceTypes, 6)
+
+		local btnSourceInv = mk("TextButton", {
+			Size = UDim2.new(0.5, -3, 1, 0),
+			BackgroundColor3 = isSourceInv and C.acc or C.row,
+			Text = "🎒 From Inventory",
+			Font = F.bold,
+			TextSize = 12,
+			TextColor3 = isSourceInv and Color3.fromRGB(0, 0, 0) or C.txt,
+			AutoButtonColor = false,
+			LayoutOrder = 2,
+		}, sourceSwitchRow)
+		corner(btnSourceInv, 6)
+
+		-- Container Source Types
+		local typesContainer = mk("Frame", {
 			Size = UDim2.new(1, 0, 0, 0),
 			AutomaticSize = Enum.AutomaticSize.Y,
 			BackgroundTransparency = 1,
-			Visible = isSingle,
-			LayoutOrder = 7,
+			Visible = not isSourceInv,
+			LayoutOrder = 11,
 		}, gTargetAcc)
-		mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, singleContainer)
+		mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, typesContainer)
 
-		makeMultiDropdownDyn(singleContainer, "Select Pet Target from Inventory (Non Favorite)", "Pilih pet dari inventory. WAJIB Non-Favorite!",
+		makeMultiDropdown(typesContainer, "Select Target Pet Types (Non Favorite)", "Jenis pet target (kosong = otomatis ambil semua pet unfavorite)",
+			reg.PET_OPTIONS, CFG.growthTargetTypes, function() persist() end, 1)
+
+		-- Container Source Inventory
+		local invContainer = mk("Frame", {
+			Size = UDim2.new(1, 0, 0, 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			Visible = isSourceInv,
+			LayoutOrder = 12,
+		}, gTargetAcc)
+		mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, invContainer)
+
+		makeMultiDropdownDyn(invContainer, "Select Pet Target from Inventory (Non Favorite)", "Pilih pet dari inventory. WAJIB Non-Favorite!",
 			function()
 				if ctx.inventoryPetOptionsNonFavorite then
 					return ctx.inventoryPetOptionsNonFavorite(CFG.growthTargetUuids)
@@ -13182,47 +13406,34 @@ return function(ctx)
 				persist()
 			end, 1)
 
-		-- Container Universal Mode (Load Pet Tipe Paten)
-		local universalContainer = mk("Frame", {
-			Size = UDim2.new(1, 0, 0, 0),
-			AutomaticSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 1,
-			Visible = not isSingle,
-			LayoutOrder = 8,
-		}, gTargetAcc)
-		mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, universalContainer)
-
-		makeInput(universalContainer, "Target Equip Max", "Jumlah target pet di garden barengan (Mode Universal)",
+		makeInput(gTargetAcc, "Target Equip Max", "Jumlah target pet di garden barengan (Mode Universal)",
 			function() return tostring(CFG.growthElephantMax or CFG.growthMaxEquip or 2) end,
 			function(t)
 				local n = tonumber(t) or 2
 				CFG.growthElephantMax = n
 				CFG.growthMaxEquip = n
 				persist()
-			end, 1)
+			end, 13)
 
-		makeMultiDropdown(universalContainer, "Select Target Pet Types (Non Favorite)", "Jenis pet target (kosong = otomatis ambil semua pet unfavorite)",
-			reg.PET_OPTIONS, CFG.growthTargetTypes, function() persist() end, 2)
-
-		btnSingle.MouseButton1Click:Connect(function()
-			CFG.growthMode = "single"
-			btnSingle.BackgroundColor3 = C.acc
-			btnSingle.TextColor3 = Color3.fromRGB(0, 0, 0)
-			btnUniversal.BackgroundColor3 = C.row
-			btnUniversal.TextColor3 = C.txt
-			singleContainer.Visible = true
-			universalContainer.Visible = false
+		btnSourceTypes.MouseButton1Click:Connect(function()
+			CFG.growthTargetSource = "types"
+			btnSourceTypes.BackgroundColor3 = C.acc
+			btnSourceTypes.TextColor3 = Color3.fromRGB(0, 0, 0)
+			btnSourceInv.BackgroundColor3 = C.row
+			btnSourceInv.TextColor3 = C.txt
+			typesContainer.Visible = true
+			invContainer.Visible = false
 			persist()
 		end)
 
-		btnUniversal.MouseButton1Click:Connect(function()
-			CFG.growthMode = "universal"
-			btnUniversal.BackgroundColor3 = C.acc
-			btnUniversal.TextColor3 = Color3.fromRGB(0, 0, 0)
-			btnSingle.BackgroundColor3 = C.row
-			btnSingle.TextColor3 = C.txt
-			singleContainer.Visible = false
-			universalContainer.Visible = true
+		btnSourceInv.MouseButton1Click:Connect(function()
+			CFG.growthTargetSource = "inventory"
+			btnSourceInv.BackgroundColor3 = C.acc
+			btnSourceInv.TextColor3 = Color3.fromRGB(0, 0, 0)
+			btnSourceTypes.BackgroundColor3 = C.row
+			btnSourceTypes.TextColor3 = C.txt
+			typesContainer.Visible = false
+			invContainer.Visible = true
 			persist()
 		end)
 

@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T01:19:10.832Z
+-- 44 modul, di-generate 2026-11-13T02:22:16.518Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -453,6 +453,17 @@ return function(ctx)
 		growthEnabled      = false,
 		growthPetTypes     = {},                                                    -- target default (dipakai step yg per-step-nya kosong)
 		growthFlow         = { "elephant", "mutation", "leveling" }, -- urutan Step 1/2/3
+		-- Tab TARGET / GBXP Node Hub settings
+		growthTargetUuids      = {}, -- Target pet UUIDs terpilih (Non Favorite)
+		growthTargetTypes      = {}, -- Target pet types terpilih (Non Favorite)
+		growthTargetKg         = 60, -- Target berat (KG at age 100)
+		growthMode             = "universal", -- "universal" (massal) atau "single" (1 per 1)
+		growthEquipAge         = 0,
+		growthUnequipAge       = 100,
+		growthMaxEquip         = 2,
+		growthNightmareTeam    = {}, -- Tim aura Nightmare
+		growth100AgeTeam       = {}, -- Tim aura 100 Age
+		growthPipelineMode     = "nodehub", -- "nodehub" (7 fase) atau "custom"
 		-- target pet PER-METHOD (kalau kosong -> fallback ke growthPetTypes)
 		growthPetTypesElephant = {},
 		growthPetTypesMutation = {},
@@ -872,6 +883,16 @@ return function(ctx)
 			CFG.growthPetTypesMutation = migratePetSet(st.growthPetTypesMutation)
 			CFG.growthPetTypesLeveling = migratePetSet(st.growthPetTypesLeveling)
 			CFG.growthFlow     = (type(st.growthFlow) == "table") and st.growthFlow or { "elephant", "mutation", "leveling" }
+			CFG.growthTargetUuids  = (type(st.growthTargetUuids) == "table") and st.growthTargetUuids or (type(st.gbxpPetUuids) == "table" and st.gbxpPetUuids or {})
+			CFG.growthTargetTypes  = migratePetSet(st.growthTargetTypes)
+			CFG.growthTargetKg     = tonumber(st.growthTargetKg) or 60
+			CFG.growthMode         = (st.growthMode == "single" or st.growthMode == "universal") and st.growthMode or "universal"
+			CFG.growthEquipAge     = tonumber(st.growthEquipAge) or 0
+			CFG.growthUnequipAge   = tonumber(st.growthUnequipAge) or 100
+			CFG.growthMaxEquip     = tonumber(st.growthMaxEquip) or tonumber(st.growthElephantMax) or 2
+			CFG.growthNightmareTeam = (type(st.growthNightmareTeam) == "table") and st.growthNightmareTeam or (type(st.elephantNightmareTeam) == "table" and st.elephantNightmareTeam or {})
+			CFG.growth100AgeTeam   = (type(st.growth100AgeTeam) == "table") and st.growth100AgeTeam or (type(st.elephant100AgeTeam) == "table" and st.elephant100AgeTeam or {})
+			CFG.growthPipelineMode = st.growthPipelineMode or "nodehub"
 			CFG.growthElephantTeam   = (type(st.growthElephantTeam) == "table") and st.growthElephantTeam or {}
 			CFG.growthElephantWeight = tonumber(st.growthElephantWeight) or 5.5
 			CFG.growthElephantMax    = tonumber(st.growthElephantMax) or 2
@@ -4579,34 +4600,24 @@ return function(ctx)
 end
 ]=],
 	["modules/growth/automation_growth.lua"] = [=[
---[[ growth.lua — Growth pipeline (BATCH per-step / 3-Fase Workflow Loop):
-     Alur Kerja Final (Berlaku di Seluruh Fase):
-       [SISTEM DIMULAI]
-       ⬇️
-       FASE 1: LEVELING (Foreground)
-       - Aksi: Script men-leveling pet sampai Age 50 (menggunakan team Leveling).
-       - Background Monitor: Terus mengecek. "Apakah ada pet yang belum Age 50?
-         Apakah ada pet yang sudah memenuhi target KG (karena buff luar)?"
-       ⬇️ (Jika Age 50 tercapai)
-       FASE 2: ELEPHANT METHOD (Foreground)
-       - Aksi: Script mengeksekusi boost. KG +0.11, Age reset jadi 1.
-         Langsung otomatis masuk antrean Fase 1 lagi (berputar membentuk loop tak terbatas).
-       - Background Monitor: Tetap berjalan. Mengecek data KG terbaru di memori.
-         "Apakah SEMUA pet target sudah KG >= 38.45?"
-       ⬇️
-       (Loop Fase 1 <-> Fase 2 berjalan terus tanpa henti, TANPA PICK UP, sampai...)
-       ⬇️
-       TRIGGER (Intervensi dari Background)
-       - Background Monitor mendeteksi bahwa SELURUH pet target sudah mencapai KG >= 38.45
-         (atau tidak ada lagi pet Age 50 yang perlu di-boost).
-       - Aksi: Background mengirim sinyal "STOP" ke Pekerja Utama.
-       ⬇️
-       FASE 3: FINISHING & CLEANUP (Foreground)
-       - Aksi: Pekerja utama berhenti dari loop. Barulah sekarang ia boleh melakukan pick up tim.
-         Ia men-leveling sisa umur (dari Age 1) sampai batas aman, lalu men-unequip semua pet ke inventory.
-       - Background Monitor: Memastikan tidak ada pet yang tertinggal di slot garden (#eq == 0).
-       ⬇️
-       [SELESAI ✅]
+--[[ growth.lua — Growth pipeline (Node Hub 7-Fase & Universal/Single Mode):
+     👑 ATURAN UTAMA:
+     - Background Monitor: Berjalan di thread terpisah setiap tick (100ms).
+       Tugasnya: membaca memori (DataService:GetData()). Jika KG pet X >= targetKg (default 60),
+       ubah status pet X menjadi "LULUS" / "PAUSED" di memori internal.
+       Zero Interruption: Tidak ada pick up atau pause yang dilakukan oleh Background.
+     - Foreground Flow:
+       Fase 1 (Nightmare): Target pet diubah mutasinya menjadi Nightmare.
+       Fase 2 (Leveling 40): Pasang tim Leveling/XP. Naikkan umur pet target ke Age 40.
+       Fase 3 (Elephant): Pasang tim Elephant. Boost +0.11 KG, umur reset ke 1.
+       Fase 4 (Background Status Check & Swap):
+         - Mode Single: Jika LULUS, simpan ke graduated, ambil 1 pet baru dari antrean.
+           Jika belum lulus, langsung kembali ke Fase 2 (Leveling 40) tanpa pick up.
+         - Mode Universal: Pet yang LULUS dicopot untuk memberi ruang bagi pet baru dari antrean.
+           Pet yang masih AKTIF tetap di garden dan mengulang Fase 2 (Leveling 40) tanpa pick up.
+       Fase 5 (Leveling 40 Final): Pet yang sudah LULUS dinaikkan umurnya ke Age 40 sekali lagi.
+       Fase 6 (Age 100): Pasang tim Age 100. Naikkan umur pet target dari 40 ke 100.
+       Fase 7 (Finishing/Cleanup): Unequip semua pet target ke inventory, send webhook, bersihkan garden.
 ]]
 return function(ctx)
 	local DataService = ctx.deps.DataService
@@ -4654,8 +4665,7 @@ return function(ctx)
 	end
 
 	----------------------------------------------------------------- Helper Klasifikasi & Rumus Weight
-	-- Pet yang di-favorite JANGAN diproses sebagai target pet (pet target WAJIB unfavorite).
-	-- Semua pet team WAJIB pet yang difavoritkan.
+	-- Pet target WAJIB Unfavorite. Pet team WAJIB Favorite.
 	local function isFav(pd) return (pd or {}).IsFavorite == true end
 
 	local function filterFavTeam(rawTeam, inv)
@@ -4673,49 +4683,6 @@ return function(ctx)
 	local function matchesType(typeSet, pt, pd)
 		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
 		return typeSet and typeSet[pt] == true
-	end
-
-	-- Flow efektif: filter step valid
-	local function effFlow()
-		local out = {}
-		local validSteps = {
-			elephant = true,
-			mutation = true,
-			leveling = true,
-			leveling_p1 = true,
-			leveling_p2 = true,
-		}
-		for _, s in ipairs(CFG.growthFlow or {}) do
-			if validSteps[s] then
-				out[#out + 1] = s
-			end
-		end
-		return out
-	end
-
-	-- Target pet PER-METHOD (fallback ke global)
-	local function typesFor(step)
-		local per
-		if step == "elephant" then
-			per = CFG.growthPetTypesElephant
-		elseif step == "mutation" then
-			per = CFG.growthPetTypesMutation
-		elseif step == "leveling_p1" then
-			per = CFG.growthPetTypesLeveling
-			if not (per and next(per)) and CFG.growthPetTypesElephant and next(CFG.growthPetTypesElephant) then
-				per = CFG.growthPetTypesElephant
-			end
-		elseif step == "leveling" or step == "leveling_p2" then
-			per = CFG.growthPetTypesLeveling
-		end
-		if per and next(per) then return per end
-		return CFG.growthPetTypes or {}
-	end
-
-	local function anyTypesSet()
-		if next(CFG.growthPetTypes or {}) then return true end
-		return next(CFG.growthPetTypesElephant or {}) or next(CFG.growthPetTypesMutation or {})
-			or next(CFG.growthPetTypesLeveling or {}) or false
 	end
 
 	local function mutOf(pd) return mutDisplay((pd or {}).MutationType) end
@@ -4772,152 +4739,59 @@ return function(ctx)
 		return w1 + 99 * (w1 / 11)
 	end
 
-	local function petMeetsEquip(step, pd)
-		pd = pd or {}
-		local lvl = pd.Level or 0
-		local assumedKg = getAssumedKg100(pd)
-		if step == "elephant" then
-			local minAge = CFG.growthElephantEquipAge or 50
-			if minAge > 0 and lvl < minAge then return false end
-			local kgMin = CFG.growthElephantKgMin or -38.45
-			if kgMin > 0 and assumedKg < kgMin then return false end
-			local kgMax = CFG.growthElephantKgMax or 38.45
-			if kgMax > 0 and assumedKg >= kgMax then return false end
-			local unequipAge = CFG.growthElephantUnequipAge or 0
-			if unequipAge > 0 and lvl >= unequipAge then return false end
-			return true
-		elseif step == "mutation" then
-			local minAge = CFG.growthMutationEquipAge or 0
-			if minAge > 0 and lvl < minAge then return false end
-			local kgMin = CFG.growthMutationKgMin or 0
-			if kgMin > 0 and assumedKg < kgMin then return false end
-			local kgMax = CFG.growthMutationKgMax or 0
-			if kgMax > 0 and assumedKg >= kgMax then return false end
-			local unequipAge = CFG.growthMutationUnequipAge or 0
-			if unequipAge > 0 and lvl >= unequipAge then return false end
-			local tg = CFG.growthMutationTargets or {}
-			if next(tg) and tg[mutOf(pd)] == true then return false end
-			return true
-		elseif step == "leveling_p1" then
-			local minAge = CFG.growthLevP1EquipAge or 0
-			if minAge > 0 and lvl < minAge then return false end
-			local kgMin = CFG.growthLevP1KgMin or 0
-			if kgMin > 0 and assumedKg < kgMin then return false end
-			local kgMax = CFG.growthLevP1KgMax or 0
-			if kgMax > 0 and assumedKg >= kgMax then return false end
-			local unequipAge = CFG.growthLevP1UnequipAge or CFG.growthLevP1Target or 50
-			if unequipAge > 0 and lvl >= unequipAge then return false end
-			return true
-		elseif step == "leveling_p2" or step == "leveling" then
-			local minAge = CFG.growthLevP2EquipAge or 50
-			if minAge > 0 and lvl < minAge then return false end
-			local kgMin = CFG.growthLevP2KgMin or 0
-			if kgMin > 0 and assumedKg < kgMin then return false end
-			local kgMax = CFG.growthLevP2KgMax or 0
-			if kgMax > 0 and assumedKg >= kgMax then return false end
-			local unequipAge = CFG.growthLevP2UnequipAge or CFG.growthLevP2Target or 500
-			if unequipAge > 0 and lvl >= unequipAge then return false end
-			return true
-		end
-		return true
-	end
+	----------------------------------------------------------------- Antrean Target Pet (Fallback & Validasi)
+	local function collectTargetQueue(inv)
+		local hasSpecificUuids = CFG.growthTargetUuids and next(CFG.growthTargetUuids)
+		local hasSpecificTypes = CFG.growthTargetTypes and next(CFG.growthTargetTypes)
+		local targetKg = tonumber(CFG.growthTargetKg) or 60
+		local queue = {}
 
-	local function stepDone(step, pd)
-		pd = pd or {}
-		local lvl = pd.Level or 0
-		local assumedKg = getAssumedKg100(pd)
-		if step == "elephant" then
-			local unequipAge = CFG.growthElephantUnequipAge or 0
-			if unequipAge > 0 and lvl >= unequipAge then return true end
-			local unequipKgMax = CFG.growthElephantKgMax or 38.45
-			if unequipKgMax > 0 and assumedKg >= unequipKgMax then return true end
-			return false
-		elseif step == "mutation" then
-			local unequipAge = CFG.growthMutationUnequipAge or 0
-			if unequipAge > 0 and lvl >= unequipAge then return true end
-			local unequipKgMax = CFG.growthMutationKgMax or 0
-			if unequipKgMax > 0 and assumedKg >= unequipKgMax then return true end
-			local tg = CFG.growthMutationTargets or {}
-			if not next(tg) then return true end
-			return tg[mutOf(pd)] == true
-		elseif step == "leveling_p1" then
-			local unequipAge = CFG.growthLevP1UnequipAge or CFG.growthLevP1Target or 50
-			if unequipAge > 0 and lvl >= unequipAge then return true end
-			local unequipKgMax = CFG.growthLevP1KgMax or 0
-			if unequipKgMax > 0 and assumedKg >= unequipKgMax then return true end
-			return lvl >= (CFG.growthLevP1Target or 50)
-		elseif step == "leveling_p2" or step == "leveling" then
-			local unequipAge = CFG.growthLevP2UnequipAge or CFG.growthLevP2Target or 500
-			if unequipAge > 0 and lvl >= unequipAge then return true end
-			local unequipKgMax = CFG.growthLevP2KgMax or 0
-			if unequipKgMax > 0 and assumedKg >= unequipKgMax then return true end
-			return lvl >= (CFG.growthLevP2Target or 500)
-		end
-		return true
-	end
+		for uuid, v in pairs(inv or {}) do
+			local pd = v.PetData
+			-- Validasi Wajib: WAJIB UNFAVORITE!
+			if pd and not isFav(pd) then
+				local isMatch = false
+				if hasSpecificUuids then
+					if CFG.growthTargetUuids[uuid] then
+						isMatch = true
+					end
+				elseif hasSpecificTypes then
+					if matchesType(CFG.growthTargetTypes, v.PetType, pd) then
+						isMatch = true
+					end
+				else
+					-- Fallback (Jika Kosong): Seluruh pet unfavorite di inventory
+					isMatch = true
+				end
 
-	----------------------------------------------------------------- Ringkasan Status untuk UI
-	ctx.state.growthStatus = "Idle"
-
-	function ctx.getGrowthSummary()
-		local ok, d = pcall(function() return DataService:GetData() end)
-		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
-		local flow = effFlow()
-		local perStep = {}
-		for _, s in ipairs(flow) do perStep[s] = { done = 0, total = 0 } end
-		for _, v in pairs(inv) do
-			if not isFav(v.PetData) and v.PetData then
-				for _, s in ipairs(flow) do
-					if matchesType(typesFor(s), v.PetType, v.PetData) then
-						perStep[s].total = perStep[s].total + 1
-						if stepDone(s, v.PetData) then perStep[s].done = perStep[s].done + 1 end
+				if isMatch then
+					local assumedKg = getAssumedKg100(pd)
+					if assumedKg < targetKg then
+						table.insert(queue, {
+							uuid = uuid,
+							assumedKg = assumedKg,
+							level = pd.Level or 0,
+							weight = pd.BaseWeight or 0,
+							petType = v.PetType or "Unknown",
+						})
 					end
 				end
 			end
 		end
-		local function nm(t) local o = {}; for k in pairs(t or {}) do o[#o + 1] = k end; return #o > 0 and table.concat(o, ", ") or "-" end
-		local function typesLabel()
-			local e, m, l = CFG.growthPetTypesElephant or {}, CFG.growthPetTypesMutation or {}, CFG.growthPetTypesLeveling or {}
-			if not (next(e) or next(m) or next(l)) then return nm(CFG.growthPetTypes) end
-			return ("E:%s | M:%s | L:%s"):format(nm(typesFor("elephant")), nm(typesFor("mutation")), nm(typesFor("leveling")))
-		end
-		local function teamNm(teamSet)
-			local count, order, total = {}, {}, 0
-			for uuid in pairs(teamSet or {}) do
-				local v = inv[uuid]
-				local pt = (v and v.PetType) or "?"
-				if not count[pt] then order[#order + 1] = pt end
-				count[pt] = (count[pt] or 0) + 1
-				total = total + 1
-			end
-			if total == 0 then return "-" end
-			local parts = {}
-			for _, pt in ipairs(order) do
-				parts[#parts + 1] = count[pt] > 1 and (pt .. " x" .. count[pt]) or pt
-			end
-			return ("(%d) %s"):format(total, table.concat(parts, ", "))
-		end
-		return {
-			status = CFG.growthEnabled and "ACTIVE" or "STOPPED",
-			step = ctx.state.growthStep or "-",
-			flow = (#flow > 0) and table.concat(flow, " -> ") or "-",
-			types = typesLabel(),
-			perStep = perStep,
-			teamElephant = teamNm(CFG.growthElephantTeam),
-			teamMutation = teamNm(CFG.growthMutationTeam),
-			teamLevP1 = teamNm(CFG.growthLevP1Team),
-			teamLevP2 = teamNm(CFG.growthLevP2Team),
-		}
+
+		table.sort(queue, function(a, b) return a.assumedKg < b.assumedKg end)
+		return queue
 	end
 
 	----------------------------------------------------------------- Helper Garden Team Sync (TANPA PICK UP TARGET PET)
-	-- Swap tim aura di garden tanpa menyentuh pet target aktif di ctx.state.growthBatch.
 	local function syncGardenTeam(desiredTeam, localEq)
-		local batch = ctx.state.growthBatch or {}
+		local active = ctx.state.growthActivePets or {}
+		local graduated = {}
+		for _, u in ipairs(ctx.state.growthGraduatedList or {}) do graduated[u] = true end
 
-		-- 1. Lepas pet yang terpasang di garden jika bukan anggota desiredTeam DAN bukan anggota batch aktif
+		-- 1. Lepas pet yang BUKAN anggota desiredTeam DAN BUKAN pet target
 		for uuid in pairs(localEq) do
-			if not batch[uuid] and not desiredTeam[uuid] then
+			if not active[uuid] and not graduated[uuid] and not desiredTeam[uuid] then
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 				localEq[uuid] = nil
 				releaseSlot(uuid)
@@ -4941,12 +4815,11 @@ return function(ctx)
 		return allTeamEquipped
 	end
 
-	-- Pastikan semua pet target batch aktif tetap terpasang di garden
-	local function syncBatchPets(localEq)
-		local allBatchEquipped = true
-		for uuid in pairs(ctx.state.growthBatch or {}) do
+	local function syncActiveTargetPets(localEq)
+		local allActiveEquipped = true
+		for uuid in pairs(ctx.state.growthActivePets or {}) do
 			if not localEq[uuid] then
-				allBatchEquipped = false
+				allActiveEquipped = false
 				local pos = getPos(uuid)
 				if pos then
 					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
@@ -4955,25 +4828,101 @@ return function(ctx)
 				end
 			end
 		end
-		return allBatchEquipped
+		return allActiveEquipped
 	end
 
-	----------------------------------------------------------------- Core Workflow Engine
-	local function checkGrowth()
+	----------------------------------------------------------------- Ringkasan Status untuk UI
+	ctx.state.growthStatus = "Idle"
+
+	function ctx.getGrowthSummary()
+		local ok, d = pcall(function() return DataService:GetData() end)
+		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+		local targetKg = tonumber(CFG.growthTargetKg) or 60
+		local doneCount, totalCount = 0, 0
+		for _, v in pairs(inv) do
+			local pd = v.PetData
+			if pd and not isFav(pd) then
+				totalCount = totalCount + 1
+				if getAssumedKg100(pd) >= targetKg then
+					doneCount = doneCount + 1
+				end
+			end
+		end
+
+		local function teamNm(teamSet)
+			local count, order, total = {}, {}, 0
+			for uuid in pairs(teamSet or {}) do
+				local v = inv[uuid]
+				local pt = (v and v.PetType) or "?"
+				if not count[pt] then order[#order + 1] = pt end
+				count[pt] = (count[pt] or 0) + 1
+				total = total + 1
+			end
+			if total == 0 then return "-" end
+			local parts = {}
+			for _, pt in ipairs(order) do
+				parts[#parts + 1] = count[pt] > 1 and (pt .. " x" .. count[pt]) or pt
+			end
+			return ("(%d) %s"):format(total, table.concat(parts, ", "))
+		end
+
+		return {
+			status = CFG.growthEnabled and "ACTIVE" or "STOPPED",
+			step = ctx.state.growthStep or "-",
+			mode = (CFG.growthMode == "single") and "Single (1 per 1)" or "Universal (Massal)",
+			targetKg = string.format("%.2f KG", targetKg),
+			progress = string.format("%d / %d Lulus", doneCount, totalCount),
+			teamElephant = teamNm(CFG.growthElephantTeam),
+			teamNightmare = teamNm(CFG.growthNightmareTeam or CFG.growthMutationTeam),
+			teamLevP1 = teamNm(CFG.growthLevP1Team),
+			team100Age = teamNm(CFG.growth100AgeTeam or CFG.growthLevP2Team),
+		}
+	end
+
+	----------------------------------------------------------------- BAGIAN 1: BACKGROUND MONITOR (Thread Terpisah)
+	local function backgroundMonitorThread(myId)
+		while CFG.growthEnabled and ctx.alive() and ctx.state.growthId == myId do
+			local ok, d = pcall(function() return DataService:GetData() end)
+			if ok and d and d.PetsData then
+				local inv = d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+				local targetKg = tonumber(CFG.growthTargetKg) or 60
+				if targetKg <= 0 then targetKg = 60 end
+
+				for uuid, petObj in pairs(ctx.state.growthTrackedPets or {}) do
+					local v = inv[uuid]
+					local pd = v and v.PetData
+					if pd then
+						local assumedKg = getAssumedKg100(pd)
+						petObj.assumedKg = assumedKg
+						petObj.level = pd.Level or 0
+						petObj.weight = pd.BaseWeight or 0
+						petObj.mutation = pd.MutationType
+
+						-- Pengecekan KG murni di Background:
+						-- Jika KG pet X >= targetKg (60), ubah status menjadi LULUS!
+						if assumedKg >= targetKg then
+							petObj.status = "LULUS"
+						else
+							petObj.status = "AKTIF"
+						end
+					end
+				end
+			end
+			task.wait(0.1) -- Cek setiap 100ms (zero interruption)
+		end
+	end
+
+	----------------------------------------------------------------- BAGIAN 2: FOREGROUND FLOW (Universal & Single Mode)
+	local function foregroundStep()
 		local ok, d = pcall(function() return DataService:GetData() end)
 		if not ok or not d or not d.PetsData then return end
 		local eq  = d.PetsData.EquippedPets or {}
 		local inv = d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
-		local flow = effFlow()
-		if not anyTypesSet() or #flow == 0 then
-			ctx.state.growthStatus = "Growth: set target pet & flow dulu"
-			return
-		end
 
 		local localEq = {}
 		for _, uuid in ipairs(eq) do localEq[uuid] = true end
 
-		-- FIRST RUN: Bersihkan garden total sekali saja saat start
+		-- FIRST RUN: Bersihkan garden awal sekali saat start
 		if ctx.state.growthFirstRun then
 			if #eq > 0 then
 				ctx.state.growthStatus = ("Growth: membersihkan garden awal (%d pet)..."):format(#eq)
@@ -4987,194 +4936,380 @@ return function(ctx)
 			ctx.state.growthFirstRun = false
 		end
 
-		-- Inisialisasi konfigurasi threshold
-		local targetKg = tonumber(CFG.growthElephantKgMax) or 38.45
-		if targetKg <= 0 then targetKg = 38.45 end
-		local eleEquipAge = tonumber(CFG.growthElephantEquipAge) or 50
-		if eleEquipAge <= 0 then eleEquipAge = 50 end
+		local mode = (CFG.growthMode == "single") and "single" or "universal"
+		local maxSlots = (mode == "single") and 1 or (tonumber(CFG.growthMaxEquip) or 2)
+		local levAge = 40
+		local finalAge = tonumber(CFG.growthUnequipAge) or 100
 
-		-- Cek apakah flow memiliki Phase 2 leveling (500 Age)
-		local hasLevP2 = false
-		for _, s in ipairs(flow) do
-			if s == "leveling_p2" then hasLevP2 = true break end
+		ctx.state.growthTrackedPets = ctx.state.growthTrackedPets or {}
+		ctx.state.growthActivePets = ctx.state.growthActivePets or {}
+		ctx.state.growthGraduatedList = ctx.state.growthGraduatedList or {}
+		if not ctx.state.growthQueueInitialized then
+			ctx.state.growthQueue = collectTargetQueue(inv)
+			ctx.state.growthQueueInitialized = true
+		end
+		ctx.state.growthQueue = ctx.state.growthQueue or {}
+
+		-- Isi slot garden yang kosong dari antrean
+		local activeCount = 0
+		for _ in pairs(ctx.state.growthActivePets) do activeCount = activeCount + 1 end
+
+		while activeCount < maxSlots and #ctx.state.growthQueue > 0 do
+			local nextPet = table.remove(ctx.state.growthQueue, 1)
+			local u = nextPet.uuid
+			ctx.state.growthActivePets[u] = true
+			ctx.state.growthTrackedPets[u] = {
+				uuid = u,
+				status = "AKTIF",
+				assumedKg = nextPet.assumedKg,
+				level = nextPet.level,
+				weight = nextPet.weight,
+				petType = nextPet.petType,
+				startTime = os.time(),
+			}
+			local pos = getPos(u)
+			if pos then
+				pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+				localEq[u] = true
+				task.wait(0.15)
+			end
+			activeCount = activeCount + 1
 		end
 
-		local safeUnequipAge
-		local finishingTeam
-		local finishingLabel
-		if hasLevP2 and CFG.growthLevP2Team and next(CFG.growthLevP2Team) then
-			safeUnequipAge = tonumber(CFG.growthLevP2Target) or 500
-			finishingTeam = filterFavTeam(CFG.growthLevP2Team, inv)
-			finishingLabel = "Phase 2 (500 Age)"
-		else
-			safeUnequipAge = tonumber(CFG.growthLevP1UnequipAge) or tonumber(CFG.growthLevP1Target) or 50
-			finishingTeam = filterFavTeam(CFG.growthLevP1Team, inv)
-			finishingLabel = "Phase 1"
-		end
-		if safeUnequipAge <= 0 then safeUnequipAge = 50 end
+		syncActiveTargetPets(localEq)
 
-		ctx.state.growthBatch = ctx.state.growthBatch or {}
-
-		-------------------------------------------------------------
-		-- BACKGROUND MONITOR: EVALUASI PET TARGET DI MEMORI
-		-------------------------------------------------------------
-		local batchCount = 0
-		local allReachedTargetKg = true
-		local allAge50 = true
-		local allResetToAge1 = true
-		local allSafeAge = true
-
-		for uuid in pairs(ctx.state.growthBatch) do
-			local v = inv[uuid]
-			local pd = v and v.PetData
-			if not pd or pd.IsFavorite then
-				-- Pet hilang atau difavoritkan -> hapus dari batch aktif
-				ctx.state.growthBatch[uuid] = nil
-				if localEq[uuid] then
-					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-					localEq[uuid] = nil
-					releaseSlot(uuid)
-				end
-			else
-				batchCount = batchCount + 1
-				local assumedKg = getAssumedKg100(pd)
-				local lvl = pd.Level or 0
-
-				-- Background Monitor: Apakah SEMUA pet target sudah KG >= 38.45?
-				if assumedKg < targetKg then
-					allReachedTargetKg = false
-				end
-
-				-- Background Monitor: Apakah ada pet yang belum Age 50?
-				if lvl < eleEquipAge then
-					allAge50 = false
-				end
-
-				-- Background Monitor: Apakah umur sudah ter-reset ke 1 setelah boost Elephant?
-				if lvl >= eleEquipAge then
-					allResetToAge1 = false
-				end
-
-				-- Background Monitor: Apakah pet sudah mencapai batas aman unequip?
-				if lvl < safeUnequipAge then
-					allSafeAge = false
+		-- CEK SELESAI TOTAL
+		if activeCount == 0 and #ctx.state.growthQueue == 0 and #ctx.state.growthGraduatedList == 0 then
+			ctx.state.growthStep = "SELESAI"
+			ctx.state.growthStatus = "Growth: SEMUA TARGET PET SELESAI ✓"
+			if #eq > 0 then
+				for _, u in ipairs(eq) do
+					pcall(function() PetsService:FireServer("UnequipPet", u) end)
+					releaseSlot(u)
+					task.wait(0.1)
 				end
 			end
+			return
 		end
 
-		-------------------------------------------------------------
-		-- KASUS 1: BELUM ADA BATCH AKTIF (batchCount == 0)
-		-------------------------------------------------------------
-		if batchCount == 0 then
-			local eleTypes = typesFor("elephant")
-			local levTypes = typesFor("leveling")
-			local defTypes = CFG.growthPetTypes or {}
-			local pool = {}
+		-- ALUR EKSEKUSI PIPELINE (7 FASE NODE HUB):
+		ctx.state.growthPhase = ctx.state.growthPhase or "fase1_nightmare"
 
-			for uuid, v in pairs(inv) do
-				local pd = v.PetData
-				if pd and not pd.IsFavorite and not localEq[uuid] then
-					if matchesType(eleTypes, v.PetType, pd) or matchesType(levTypes, v.PetType, pd) or matchesType(defTypes, v.PetType, pd) then
-						local assumedKg = getAssumedKg100(pd)
-						if assumedKg < targetKg then
-							table.insert(pool, { uuid = uuid, assumedKg = assumedKg, lvl = pd.Level or 0 })
+		if ctx.state.growthPhase == "fase1_nightmare" then
+			---------------------------------------------------------
+			-- FASE 1: NIGHTMARE
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 1: Nightmare Mutation"
+			local nightTeam = filterFavTeam(CFG.growthNightmareTeam or CFG.growthMutationTeam, inv)
+
+			if not next(nightTeam) then
+				-- Jika user tidak pasang tim Nightmare, lewati ke Fase 2
+				ctx.state.growthPhase = "fase2_leveling40"
+				return
+			end
+
+			local teamReady = syncGardenTeam(nightTeam, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = "[Fase 1] Nightmare: nunggu tim lengkap..."
+				return
+			end
+
+			local allNightmare = true
+			for u in pairs(ctx.state.growthActivePets) do
+				local v = inv[u]
+				local pd = v and v.PetData
+				if pd then
+					if mutOf(pd) ~= "Nightmare" then
+						allNightmare = false
+						if hasMut(pd) then
+							cleansePet(u)
 						end
 					end
 				end
 			end
 
-			if #pool == 0 then
-				-- [SELESAI ✅] Seluruh pet target sudah mencapai target KG!
-				ctx.state.growthStep = "SELESAI"
-				ctx.state.growthStatus = "Growth: semua pet target sudah mencapai target KG ✓"
-				if #eq > 0 then
-					for _, u in ipairs(eq) do
+			if not allNightmare then
+				ctx.state.growthStatus = "[Fase 1] Nightmare: menunggu mutasi Nightmare pada pet target..."
+				return
+			else
+				ctx.state.growthPhase = "fase2_leveling40"
+				return
+			end
+
+		elseif ctx.state.growthPhase == "fase2_leveling40" then
+			---------------------------------------------------------
+			-- FASE 2: LEVELING 40
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 2: Leveling 40"
+			local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
+
+			-- Swap tim aura ke tim Leveling/XP. PET TARGET TETAP DI GARDEN (TANPA PICK UP!)
+			local teamReady = syncGardenTeam(levTeam, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = "[Fase 2] Leveling 40: nunggu tim lengkap..."
+				return
+			end
+
+			local allAge40 = true
+			local ageProgress = {}
+			for u in pairs(ctx.state.growthActivePets) do
+				local v = inv[u]
+				local pd = v and v.PetData
+				local lvl = pd and pd.Level or 0
+				table.insert(ageProgress, tostring(lvl) .. "/40")
+				if lvl < levAge then
+					allAge40 = false
+				end
+			end
+
+			if not allAge40 then
+				ctx.state.growthStatus = ("[Fase 2] Leveling 40: menaikkan umur pet target (%s)..."):format(table.concat(ageProgress, ", "))
+				return
+			else
+				ctx.state.growthPhase = "fase3_elephant"
+				return
+			end
+
+		elseif ctx.state.growthPhase == "fase3_elephant" then
+			---------------------------------------------------------
+			-- FASE 3: ELEPHANT BOOST
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 3: Elephant Boost (+0.11 KG)"
+			local eleTeam = filterFavTeam(CFG.growthElephantTeam, inv)
+
+			-- Swap tim aura ke tim Elephant. PET TARGET TETAP DI GARDEN (TANPA PICK UP!)
+			local teamReady = syncGardenTeam(eleTeam, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = "[Fase 3] Elephant: nunggu tim lengkap..."
+				return
+			end
+
+			if ctx.state.growthLastStepName ~= "elephant" then
+				ctx.state.growthLastStepName = "elephant"
+				if ctx.webhookElephant and ctx.webhookElephant.sendEnabled then
+					pcall(function() ctx.webhookElephant.sendEnabled(ctx) end)
+				end
+			end
+
+			-- Cek apakah umur pet target sudah ter-reset ke 1 (boost pasif mendarat)
+			local allReset = true
+			local weightInfo = {}
+			for u in pairs(ctx.state.growthActivePets) do
+				local v = inv[u]
+				local pd = v and v.PetData
+				local lvl = pd and pd.Level or 0
+				local assumed = getAssumedKg100(pd)
+				table.insert(weightInfo, string.format("%.2f KG (Age %d)", assumed, lvl))
+				if lvl >= levAge then
+					allReset = false
+				end
+			end
+
+			if not allReset then
+				ctx.state.growthStatus = ("[Fase 3] Elephant: menanti boost +0.11 KG (%s)..."):format(table.concat(weightInfo, ", "))
+				return
+			else
+				-- Boost sudah mendarat pada semua pet aktif! Lanjut ke Fase 4: Status Check & Swap
+				ctx.state.growthPhase = "fase4_check_swap"
+				return
+			end
+
+		elseif ctx.state.growthPhase == "fase4_check_swap" then
+			---------------------------------------------------------
+			-- FASE 4: BACKGROUND STATUS CHECK & SWAP
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 4: Check Status & Swap"
+
+			if mode == "single" then
+				local singleUuid = next(ctx.state.growthActivePets)
+				if singleUuid then
+					local petObj = ctx.state.growthTrackedPets[singleUuid]
+					-- Foreground HANYA membaca status dari Background Monitor
+					if petObj and petObj.status == "LULUS" then
+						table.insert(ctx.state.growthGraduatedList, singleUuid)
+						ctx.state.growthActivePets[singleUuid] = nil
+						pcall(function() PetsService:FireServer("UnequipPet", singleUuid) end)
+						localEq[singleUuid] = nil
+						releaseSlot(singleUuid)
+						task.wait(0.15)
+
+						if #ctx.state.growthQueue > 0 then
+							ctx.state.growthPhase = "fase1_nightmare"
+						else
+							ctx.state.growthPhase = "fase5_leveling40_final"
+						end
+						return
+					else
+						-- Belum lulus -> ulangi Fase 2 (Leveling 40) tanpa jeda
+						ctx.state.growthPhase = "fase2_leveling40"
+						return
+					end
+				else
+					if #ctx.state.growthQueue > 0 then
+						ctx.state.growthPhase = "fase1_nightmare"
+					else
+						ctx.state.growthPhase = "fase5_leveling40_final"
+					end
+					return
+				end
+
+			else -- Mode Universal
+				local hasActive = false
+				for u in pairs(ctx.state.growthActivePets) do
+					local petObj = ctx.state.growthTrackedPets[u]
+					if petObj and petObj.status == "LULUS" then
+						-- Pet Lulus! Copot pet ini (tanpa menghentikan pet lain)
+						table.insert(ctx.state.growthGraduatedList, u)
+						ctx.state.growthActivePets[u] = nil
 						pcall(function() PetsService:FireServer("UnequipPet", u) end)
+						localEq[u] = nil
 						releaseSlot(u)
-						task.wait(0.1)
+
+						-- Isi slot kosong dengan pet baru dari antrean
+						if #ctx.state.growthQueue > 0 then
+							local newPet = table.remove(ctx.state.growthQueue, 1)
+							local newU = newPet.uuid
+							ctx.state.growthActivePets[newU] = true
+							ctx.state.growthTrackedPets[newU] = {
+								uuid = newU,
+								status = "AKTIF",
+								assumedKg = newPet.assumedKg,
+								level = newPet.level,
+								weight = newPet.weight,
+								petType = newPet.petType,
+								startTime = os.time(),
+							}
+							local pos = getPos(newU)
+							if pos then
+								pcall(function() PetsService:FireServer("EquipPet", newU, CFrame.new(pos)) end)
+								localEq[newU] = true
+								task.wait(0.15)
+							end
+							hasActive = true
+						end
+					else
+						hasActive = true
 					end
 				end
-				return
-			end
 
-			-- Urutkan pool berdasarkan assumedKg (pet dengan berat terdekat diproses bersamaan)
-			table.sort(pool, function(a, b) return a.assumedKg < b.assumedKg end)
-
-			local maxBatch = tonumber(CFG.growthElephantMax) or tonumber(CFG.growthLevP1Max) or 2
-			local toTake = math.min(maxBatch, #pool)
-			ctx.state.growthBatch = {}
-			ctx.state.growthBatchStartTime = ctx.state.growthBatchStartTime or {}
-
-			for i = 1, toTake do
-				local u = pool[i].uuid
-				ctx.state.growthBatch[u] = true
-				ctx.state.growthBatchStartTime[u] = os.time()
-				local pos = getPos(u)
-				if pos then
-					pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
-					localEq[u] = true
-					task.wait(0.15)
+				if hasActive then
+					-- Masih ada pet AKTIF -> ulangi Fase 2 (Leveling 40)
+					ctx.state.growthPhase = "fase2_leveling40"
+					return
+				else
+					-- Semua pet aktif sudah LULUS dan antrean habis
+					if #ctx.state.growthQueue == 0 then
+						ctx.state.growthPhase = "fase5_leveling40_final"
+						return
+					else
+						ctx.state.growthPhase = "fase1_nightmare"
+						return
+					end
 				end
 			end
 
-			ctx.state.growthStopLoop = false
-			ctx.state.growthBatchStage = "fase1_leveling"
-			ctx.state.growthStatus = ("Growth: memulai batch baru (%d pet target)..."):format(toTake)
-			return
-		end
-
-		-- Pastikan pet target batch aktif tetap terpasang di garden
-		syncBatchPets(localEq)
-
-		-------------------------------------------------------------
-		-- TRIGGER INTERVENSI DARI BACKGROUND MONITOR
-		-------------------------------------------------------------
-		-- Background Monitor mendeteksi bahwa SELURUH pet target sudah mencapai KG >= 38.45.
-		-- Aksi: Background mengirim sinyal "STOP" ke Pekerja Utama -> masuk Fase 3.
-		if allReachedTargetKg then
-			ctx.state.growthStopLoop = true
-			ctx.state.growthBatchStage = "fase3_finishing"
-		end
-
-		-------------------------------------------------------------
-		-- EKSEKUSI FASE WORKFLOW
-		-------------------------------------------------------------
-		if ctx.state.growthStopLoop or ctx.state.growthBatchStage == "fase3_finishing" then
+		elseif ctx.state.growthPhase == "fase5_leveling40_final" then
 			---------------------------------------------------------
-			-- FASE 3: FINISHING & CLEANUP (Foreground)
+			-- FASE 5: LEVELING 40 FINAL
 			---------------------------------------------------------
-			-- Pekerja utama berhenti dari loop boost.
-			-- Pet saat ini berada di Age 1 (efek boost elephant terakhir).
-			-- Tim Leveling dipasang untuk menaikkan sisa umur sampai batas aman.
-			local teamReady = syncGardenTeam(finishingTeam, localEq)
+			ctx.state.growthStep = "Fase 5: Leveling 40 Final"
+			local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
+
+			local teamReady = syncGardenTeam(levTeam, localEq)
 			if not teamReady then
-				ctx.state.growthStatus = ("[Fase 3] Finishing (%s): nunggu tim lengkap..."):format(finishingLabel)
+				ctx.state.growthStatus = "[Fase 5] Leveling 40 Final: nunggu tim lengkap..."
 				return
 			end
 
-			if not allSafeAge then
-				ctx.state.growthStep = ("Fase 3: Finishing (%s)"):format(finishingLabel)
-				local ages = {}
-				for u in pairs(ctx.state.growthBatch) do
-					local v = inv[u]
-					local pd = v and v.PetData
-					table.insert(ages, tostring(pd and pd.Level or 0) .. "/" .. tostring(safeUnequipAge))
+			local allFinal40 = true
+			local finalProgress = {}
+			for _, u in ipairs(ctx.state.growthGraduatedList) do
+				if not localEq[u] then
+					local pos = getPos(u)
+					if pos then
+						pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+						localEq[u] = true
+						task.wait(0.15)
+					end
 				end
-				ctx.state.growthStatus = ("[Fase 3] Finishing: leveling sisa umur %s ke batas aman..."):format(table.concat(ages, ", "))
+				local v = inv[u]
+				local pd = v and v.PetData
+				local lvl = pd and pd.Level or 0
+				table.insert(finalProgress, tostring(lvl) .. "/40")
+				if lvl < levAge then
+					allFinal40 = false
+				end
+			end
+
+			if not allFinal40 then
+				ctx.state.growthStatus = ("[Fase 5] Leveling 40 Final: umur pet lulus (%s)..."):format(table.concat(finalProgress, ", "))
+				return
+			else
+				ctx.state.growthPhase = "fase6_age100"
 				return
 			end
 
-			-- Batas aman tercapai:
-			-- "Barulah sekarang ia boleh melakukan pick up tim ... lalu men-unequip semua pet ke inventory."
-			ctx.state.growthStatus = "[Fase 3] Finishing: unequip pet target ke inventory..."
-			for u in pairs(ctx.state.growthBatch) do
+		elseif ctx.state.growthPhase == "fase6_age100" then
+			---------------------------------------------------------
+			-- FASE 6: AGE 100
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 6: Age 100"
+			local a100Team = filterFavTeam(CFG.growth100AgeTeam or CFG.growthLevP2Team, inv)
+
+			if not next(a100Team) then
+				-- Jika tim 100 Age kosong, langsung ke Fase 7
+				ctx.state.growthPhase = "fase7_cleanup"
+				return
+			end
+
+			local teamReady = syncGardenTeam(a100Team, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = "[Fase 6] Age 100: nunggu tim lengkap..."
+				return
+			end
+
+			local allAge100 = true
+			local a100Progress = {}
+			for _, u in ipairs(ctx.state.growthGraduatedList) do
+				if not localEq[u] then
+					local pos = getPos(u)
+					if pos then
+						pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+						localEq[u] = true
+						task.wait(0.15)
+					end
+				end
+				local v = inv[u]
+				local pd = v and v.PetData
+				local lvl = pd and pd.Level or 0
+				table.insert(a100Progress, tostring(lvl) .. "/" .. tostring(finalAge))
+				if lvl < finalAge then
+					allAge100 = false
+				end
+			end
+
+			if not allAge100 then
+				ctx.state.growthStatus = ("[Fase 6] Age 100: menaikkan umur ke %d (%s)..."):format(finalAge, table.concat(a100Progress, ", "))
+				return
+			else
+				ctx.state.growthPhase = "fase7_cleanup"
+				return
+			end
+
+		elseif ctx.state.growthPhase == "fase7_cleanup" then
+			---------------------------------------------------------
+			-- FASE 7: FINISHING / CLEANUP
+			---------------------------------------------------------
+			ctx.state.growthStep = "Fase 7: Finishing & Cleanup"
+			ctx.state.growthStatus = "[Fase 7] Finishing: unequip semua pet target dan simpan ke inventory..."
+
+			for _, u in ipairs(ctx.state.growthGraduatedList) do
 				local v = inv[u]
 				local pd = v and v.PetData
 				local pt = v and v.PetType or "Unknown"
 				local dur = 0
-				if ctx.state.growthBatchStartTime and ctx.state.growthBatchStartTime[u] then
-					dur = os.time() - ctx.state.growthBatchStartTime[u]
-					ctx.state.growthBatchStartTime[u] = nil
+				if ctx.state.growthTrackedPets[u] and ctx.state.growthTrackedPets[u].startTime then
+					dur = os.time() - ctx.state.growthTrackedPets[u].startTime
 				end
 				if ctx.webhookElephant and ctx.webhookElephant.sendFinished then
 					pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
@@ -5188,15 +5323,7 @@ return function(ctx)
 				task.wait(0.15)
 			end
 
-			-- Unequip pet tim di garden agar slot bersih total
-			for u in pairs(finishingTeam) do
-				pcall(function() PetsService:FireServer("UnequipPet", u) end)
-				localEq[u] = nil
-				releaseSlot(u)
-				task.wait(0.1)
-			end
-
-			-- Background Monitor: Memastikan tidak ada pet yang tertinggal di slot garden
+			-- Unequip semua pet tim
 			local ok2, d2 = pcall(function() return DataService:GetData() end)
 			local eq2 = (ok2 and d2 and d2.PetsData and d2.PetsData.EquippedPets) or {}
 			for _, u in ipairs(eq2) do
@@ -5205,99 +5332,13 @@ return function(ctx)
 				task.wait(0.1)
 			end
 
-			ctx.state.growthBatch = {}
-			ctx.state.growthBatchStage = nil
-			ctx.state.growthStopLoop = false
-			ctx.state.growthStatus = "Growth: batch selesai & dibersihkan ✓, cek antrean..."
+			ctx.state.growthGraduatedList = {}
+			ctx.state.growthActivePets = {}
+			ctx.state.growthTrackedPets = {}
+			ctx.state.growthQueueInitialized = false
+			ctx.state.growthPhase = "fase1_nightmare"
+			ctx.state.growthStatus = "Growth: SEMUA TARGET PET SELESAI ✓"
 			return
-
-		else
-			---------------------------------------------------------
-			-- LOOP FASE 1 <-> FASE 2 (BERPUTAR TERUS TANPA PICK UP)
-			---------------------------------------------------------
-			-- Evaluasi transisi state loop
-			if ctx.state.growthBatchStage == "fase2_elephant" then
-				-- Jika sedang di Fase 2 dan SEMUA pet sudah ter-reset umurnya ke < 50:
-				-- Berarti boost Elephant sudah mendarat!
-				if allResetToAge1 then
-					if allReachedTargetKg then
-						ctx.state.growthStopLoop = true
-						ctx.state.growthBatchStage = "fase3_finishing"
-						return
-					else
-						-- Masuk antrean Fase 1 lagi (looping tanpa pick up)
-						ctx.state.growthBatchStage = "fase1_leveling"
-					end
-				end
-			elseif ctx.state.growthBatchStage == "fase1_leveling" then
-				-- Jika sedang di Fase 1 dan SEMUA pet sudah mencapai Age 50:
-				if allAge50 then
-					-- Masuk ke Fase 2: Elephant boost
-					ctx.state.growthBatchStage = "fase2_elephant"
-				end
-			else
-				ctx.state.growthBatchStage = "fase1_leveling"
-			end
-
-			-- EKSEKUSI FOREGROUND SESUAI FASE AKTIF:
-			if ctx.state.growthBatchStage == "fase1_leveling" then
-				-----------------------------------------------------
-				-- FASE 1: LEVELING (Foreground)
-				-----------------------------------------------------
-				ctx.state.growthStep = "Fase 1: Leveling (Age -> 50)"
-				local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
-
-				-- Swap tim aura ke tim Leveling.
-				-- PET TARGET DI ctx.state.growthBatch TETAP DIPERTAHANKAN (TANPA PICK UP!)
-				local teamReady = syncGardenTeam(levTeam, localEq)
-				if not teamReady then
-					ctx.state.growthStatus = "[Fase 1] Leveling: nunggu tim Leveling lengkap..."
-					return
-				end
-
-				local ages = {}
-				for u in pairs(ctx.state.growthBatch) do
-					local v = inv[u]
-					local pd = v and v.PetData
-					table.insert(ages, tostring(pd and pd.Level or 0) .. "/" .. tostring(eleEquipAge))
-				end
-				ctx.state.growthStatus = ("[Fase 1] Leveling umur: %s (loop tanpa pick up)"):format(table.concat(ages, ", "))
-				return
-
-			elseif ctx.state.growthBatchStage == "fase2_elephant" then
-				-----------------------------------------------------
-				-- FASE 2: ELEPHANT METHOD (Foreground)
-				-----------------------------------------------------
-				ctx.state.growthStep = "Fase 2: Elephant Boost (+0.11 KG)"
-				local eleTeam = filterFavTeam(CFG.growthElephantTeam, inv)
-
-				-- Swap tim aura ke tim Elephant.
-				-- PET TARGET DI ctx.state.growthBatch TETAP DIPERTAHANKAN (TANPA PICK UP!)
-				local teamReady = syncGardenTeam(eleTeam, localEq)
-				if not teamReady then
-					ctx.state.growthStatus = "[Fase 2] Elephant: nunggu tim Elephant lengkap..."
-					return
-				end
-
-				-- Webhook notification saat masuk Elephant
-				if ctx.state.growthLastStepName ~= "elephant" then
-					ctx.state.growthLastStepName = "elephant"
-					if ctx.webhookElephant and ctx.webhookElephant.sendEnabled then
-						pcall(function() ctx.webhookElephant.sendEnabled(ctx) end)
-					end
-				end
-
-				local weights = {}
-				for u in pairs(ctx.state.growthBatch) do
-					local v = inv[u]
-					local pd = v and v.PetData
-					local bw = pd and pd.BaseWeight or 0
-					local assumed = getAssumedKg100(pd)
-					table.insert(weights, string.format("%.2f (assumed %.2f/%.2f)", bw, assumed, targetKg))
-				end
-				ctx.state.growthStatus = ("[Fase 2] Elephant aktif: menanti boost +0.11 KG (%s)..."):format(table.concat(weights, ", "))
-				return
-			end
 		end
 	end
 
@@ -5307,8 +5348,15 @@ return function(ctx)
 		local myId = ctx.state.growthId
 		ctx.elevate()
 		ctx.state.growthFirstRun = true
+
+		-- Thread terpisah untuk Background Monitor (setiap 100ms)
+		task.spawn(function()
+			backgroundMonitorThread(myId)
+		end)
+
+		-- Thread utama untuk Foreground Flow
 		while CFG.growthEnabled and ctx.alive() and ctx.state.growthId == myId do
-			pcall(checkGrowth)
+			pcall(foregroundStep)
 			task.wait(1.5)
 		end
 		ctx.state.growthStatus = "Idle"
@@ -5319,9 +5367,11 @@ return function(ctx)
 		ctx.state.elephantCfgOverride = { team = CFG.growthElephantTeam, types = CFG.growthPetTypes, weight = CFG.growthElephantWeight }
 		ctx.state.elephantWebhookPost = true
 		ctx.state.growthLastStepName = nil
-		ctx.state.growthBatch = {}
-		ctx.state.growthBatchStage = nil
-		ctx.state.growthStopLoop = false
+		ctx.state.growthActivePets = {}
+		ctx.state.growthTrackedPets = {}
+		ctx.state.growthGraduatedList = {}
+		ctx.state.growthQueueInitialized = false
+		ctx.state.growthPhase = "fase1_nightmare"
 		task.spawn(growthLoop)
 	end
 
@@ -5329,9 +5379,11 @@ return function(ctx)
 		ctx.state.growthId = (ctx.state.growthId or 0) + 1
 		ctx.state.elephantCfgOverride = nil
 		ctx.state.elephantWebhookPost = nil
-		ctx.state.growthBatch = {}
-		ctx.state.growthBatchStage = nil
-		ctx.state.growthStopLoop = false
+		ctx.state.growthActivePets = {}
+		ctx.state.growthTrackedPets = {}
+		ctx.state.growthGraduatedList = {}
+		ctx.state.growthQueueInitialized = false
+		ctx.state.growthPhase = nil
 		if ctx.clearGarden then ctx.clearGarden("Growth") end
 	end
 end
@@ -13085,11 +13137,191 @@ return function(ctx)
 		local function capStep(s) for _, o in ipairs(FLOW_OPTS) do if o.name == s then return o.display end end return "Select" end
 
 		local sub = makeSubTabs(flowPage, {
+			{ id = "target",   name = "TARGET" },
 			{ id = "flow",     name = "Flow Config" },
 			{ id = "elephant", name = "Elephant" },
 			{ id = "mutation", name = "Mutation" },
 			{ id = "leveling", name = "Leveling" },
-		}, "flow", { hasBottomBar = true, hasInfoLine = false })
+		}, "target", { hasBottomBar = true, hasInfoLine = false })
+
+		-- 0) TAB TARGET (Node Hub GBXP style)
+		local pTarget = sub.pages["target"]
+		local gTargetAcc = makeAccordion(pTarget, "( TARGET / GBXP ) Threshold Age & Kg", 1, true)
+
+		-- Badge stats counter (Elephant, Nightmare, 100 Age, XP, Target)
+		local badgeRow = mk("Frame", {
+			Size = UDim2.new(1, 0, 0, 30),
+			BackgroundColor3 = C.bg,
+			BorderSizePixel = 0,
+			LayoutOrder = 1,
+		}, gTargetAcc)
+		corner(badgeRow, 6)
+		pad(badgeRow, 8, 8, 4, 4)
+
+		local badgeLabel = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundTransparency = 1,
+			Text = "🐘 Elephant (0)   🌙 Nightmare (0)   💯 100 Age (0)   🧊 XP (0)   🎯 Target (0)",
+			Font = F.bold,
+			TextSize = 11,
+			TextColor3 = C.acc,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+		}, badgeRow)
+
+		local errorLabel = mk("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 20),
+			BackgroundTransparency = 1,
+			Text = "",
+			Font = F.bold,
+			TextSize = 11,
+			TextColor3 = Color3.fromRGB(255, 75, 75),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = 2,
+			Visible = false,
+		}, gTargetAcc)
+
+		local function updateTargetBadge()
+			local eleCount = 0; for _ in pairs(CFG.growthElephantTeam or {}) do eleCount = eleCount + 1 end
+			local nightCount = 0; for _ in pairs(CFG.growthNightmareTeam or CFG.growthMutationTeam or {}) do nightCount = nightCount + 1 end
+			local a100Count = 0; for _ in pairs(CFG.growth100AgeTeam or CFG.growthLevP2Team or {}) do a100Count = a100Count + 1 end
+			local xpCount = 0; for _ in pairs(CFG.growthLevP1Team or {}) do xpCount = xpCount + 1 end
+			local targetCount = 0; for _ in pairs(CFG.growthTargetUuids or {}) do targetCount = targetCount + 1 end
+			if targetCount == 0 then
+				local ok, d = pcall(function() return ctx.deps.DataService:GetData() end)
+				local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+				for _, v in pairs(inv) do
+					local pd = v.PetData
+					if pd and not pd.IsFavorite then
+						targetCount = targetCount + 1
+					end
+				end
+			end
+			badgeLabel.Text = string.format("🐘 Elephant (%d)   🌙 Nightmare (%d)   💯 100 Age (%d)   🧊 XP (%d)   🎯 Target (%d)",
+				eleCount, nightCount, a100Count, xpCount, targetCount)
+		end
+		task.spawn(function()
+			while pTarget and pTarget.Parent do
+				pcall(updateTargetBadge)
+				task.wait(2)
+			end
+		end)
+
+		-- Mode Execution
+		makeSingleDropdown(gTargetAcc, "Mode Execution", "Pilih mode pengerjaan target",
+			function() return {
+				{ name = "universal", display = "Mode Universal (Fokus Massal / Slot Penuh)" },
+				{ name = "single", display = "Mode Single (Fokus 1 per 1)" }
+			} end,
+			function() return (CFG.growthMode == "single") and "Mode Single (Fokus 1 per 1)" or "Mode Universal (Fokus Massal / Slot Penuh)" end,
+			function(code) CFG.growthMode = code; persist() end, 3)
+
+		-- Pipeline Flow Mode
+		makeSingleDropdown(gTargetAcc, "Pipeline Flow Mode", "Pilihan alur eksekusi pipeline",
+			function() return {
+				{ name = "nodehub", display = "Node Hub (Nightmare -> XP 40 -> Elephant Loop -> XP 40 Final -> Age 100 -> Finish)" },
+				{ name = "custom", display = "Custom Flow (Sesuai tab Flow Config)" }
+			} end,
+			function() return (CFG.growthPipelineMode == "custom") and "Custom Flow (Sesuai tab Flow Config)" or "Node Hub (Nightmare -> XP 40 -> Elephant Loop -> XP 40 Final -> Age 100 -> Finish)" end,
+			function(code) CFG.growthPipelineMode = code; persist() end, 4)
+
+		-- Threshold inputs
+		makeInput(gTargetAcc, "Equip Age", "Umur minimal pet sebelum dipasang (default 0)",
+			function() return tostring(CFG.growthEquipAge or 0) end,
+			function(t) CFG.growthEquipAge = tonumber(t) or 0; persist() end, 5)
+
+		makeInput(gTargetAcc, "Unequip Age", "Umur maksimal pet sebelum dicopot (default 100)",
+			function() return tostring(CFG.growthUnequipAge or 100) end,
+			function(t) CFG.growthUnequipAge = tonumber(t) or 100; persist() end, 6)
+
+		makeInput(gTargetAcc, "Equip When KG Min ( Assumed at age 100 )", "Batas berat KG minimal (default 0)",
+			function() return tostring(CFG.growthElephantKgMin or 0) end,
+			function(t) CFG.growthElephantKgMin = tonumber(t) or 0; persist() end, 7)
+
+		makeInput(gTargetAcc, "Unequip When KG Max ( Assumed at age 100 )", "Target berat KG untuk dinyatakan LULUS (default 60)",
+			function() return tostring(CFG.growthTargetKg or 60) end,
+			function(t)
+				local n = tonumber(t) or 60
+				CFG.growthTargetKg = n
+				CFG.growthElephantKgMax = n
+				persist()
+			end, 8)
+
+		makeInput(gTargetAcc, "Target Max Equip / GBXP Max Equip", "Jumlah pet target di garden (Mode Universal, default 2)",
+			function() return tostring(CFG.growthMaxEquip or 2) end,
+			function(t)
+				local n = tonumber(t) or 2
+				CFG.growthMaxEquip = n
+				CFG.growthElephantMax = n
+				persist()
+			end, 9)
+
+		-- Select Pet Target (Non Favorite) - Validasi Wajib
+		makeMultiDropdownDyn(gTargetAcc, "Select Pet Target (Non Favorite)", "Pilih pet spesifik inventory. WAJIB Non-Favorite! Kosong = fallback semua.",
+			function()
+				if ctx.inventoryPetOptionsNonFavorite then
+					return ctx.inventoryPetOptionsNonFavorite(CFG.growthTargetUuids)
+				end
+				return {}
+			end,
+			CFG.growthTargetUuids,
+			function()
+				-- Validasi Wajib: Pet yang dipilih WAJIB unfavorite
+				local ok, d = pcall(function() return ctx.deps.DataService:GetData() end)
+				local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+				local hasFavError = false
+				for u in pairs(CFG.growthTargetUuids or {}) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					if pd and pd.IsFavorite then
+						CFG.growthTargetUuids[u] = nil
+						hasFavError = true
+					end
+				end
+				if hasFavError then
+					errorLabel.Text = "⚠️ Validasi Gagal: Pet terpilih berstatus Favorite! Wajib Unfavorite."
+					errorLabel.Visible = true
+				else
+					errorLabel.Visible = false
+				end
+				persist()
+				updateTargetBadge()
+			end, 10)
+
+		-- Select Target Pet Types (Non Favorite)
+		makeMultiDropdown(gTargetAcc, "Target Pet Types", "Pilih jenis pet target (kosong = fallback semua pet unfavorite)",
+			reg.PET_OPTIONS, CFG.growthTargetTypes, function() persist(); updateTargetBadge() end, 11)
+
+		-- Teams Configuration (Wajib Favorite)
+		local gTeamsAcc = makeAccordion(pTarget, "Team Configuration (Wajib Favorite List)", 2, true)
+
+		makeMultiDropdownDyn(gTeamsAcc, "Select Nightmare Team (Favorite List)", "Team aura mutasi Nightmare (wajib Favorit)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.growthNightmareTeam) end
+				return ctx.inventoryPetOptions(CFG.growthNightmareTeam)
+			end,
+			CFG.growthNightmareTeam, function() persist(); updateTargetBadge() end, 1)
+
+		makeMultiDropdownDyn(gTeamsAcc, "Select XP / Leveling 40 Team (Favorite List)", "Team aura Leveling ke Age 40 (wajib Favorit)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.growthLevP1Team) end
+				return ctx.inventoryPetOptions(CFG.growthLevP1Team)
+			end,
+			CFG.growthLevP1Team, function() persist(); updateTargetBadge() end, 2)
+
+		makeMultiDropdownDyn(gTeamsAcc, "Select Elephant Team (Favorite List)", "Team aura boost Elephant +0.11 KG (wajib Favorit)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.growthElephantTeam) end
+				return ctx.inventoryPetOptions(CFG.growthElephantTeam)
+			end,
+			CFG.growthElephantTeam, function() persist(); updateTargetBadge() end, 3)
+
+		makeMultiDropdownDyn(gTeamsAcc, "Select 100 Age Team (Favorite List)", "Team aura Leveling ke Age 100 (wajib Favorit)",
+			function()
+				if ctx.inventoryPetOptionsFavorite then return ctx.inventoryPetOptionsFavorite(CFG.growth100AgeTeam) end
+				return ctx.inventoryPetOptions(CFG.growth100AgeTeam)
+			end,
+			CFG.growth100AgeTeam, function() persist(); updateTargetBadge() end, 4)
 
 		-- 1) FLOW CONFIG
 		local pFlow = sub.pages["flow"]
@@ -13220,7 +13452,7 @@ return function(ctx)
 				CFG.growthEnabled = false
 				persist()
 				ctx.stopGrowth()
-			end, 999)
+			end, 999, "⚡ START KG", "STOP")
 	end
 
 	------------------------------------------------------------------ HATCH (auto hatch + auto sell)

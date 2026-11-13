@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T00:46:17.530Z
+-- 44 modul, di-generate 2026-11-13T01:19:10.832Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -1581,11 +1581,11 @@ return function(ctx)
 		local localEq, localEqCount = {}, 0
 		for _, uuid in ipairs(eq) do localEq[uuid] = true; localEqCount = localEqCount + 1 end
 
-		-- A. FIRST RUN atau Transisi Stage -> bersihkan garden jika stage berganti
-		if ctx.state.elephantFirstRun or (ctx.state.elephantLastStage and ctx.state.elephantLastStage ~= activeStage) then
+		-- A. FIRST RUN: bersihkan garden sekali saat start jika belum ada batch aktif
+		if ctx.state.elephantFirstRun then
 			ctx.state.elephantFirstRun = false
 			ctx.state.elephantLastStage = activeStage
-			if #eq > 0 then
+			if #eq > 0 and not (ctx.state.elephantBatch and next(ctx.state.elephantBatch)) then
 				ctx.state.elephantStatus = string.format("Resetting garden for Stage %s...", activeStage)
 				for _, uuid in ipairs(eq) do
 					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
@@ -1593,6 +1593,17 @@ return function(ctx)
 					task.wait(0.15)
 				end
 				return
+			end
+		end
+
+		-- Transisi stage (XP <-> Elephant <-> 500 Age):
+		-- Swap tim aura TANPA mencopot pet target batch aktif (TANPA PICK UP!)
+		local batch = ctx.state.elephantBatch or {}
+		for uuid in pairs(localEq) do
+			if not batch[uuid] and not activeTeam[uuid] then
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				localEq[uuid] = nil; localEqCount = localEqCount - 1
+				task.wait(0.1)
 			end
 		end
 		ctx.state.elephantLastStage = activeStage
@@ -1632,8 +1643,8 @@ return function(ctx)
 			end
 		end
 
-		-- Periksa kelulusan batch sesi aktif:
-		-- "semua pet persesi sampai memenuhi target syarat unequip atau memenuhi target equip tahap selanjutnya baru pindah"
+		-- Periksa kelulusan batch sesi aktif (TANPA PICK UP selama loop):
+		-- Pet hanya lulus jika sudah mencapai target KG (atau target weight) DAN batas aman umur!
 		local batchCount = 0
 		local allSatisfied = true
 
@@ -1647,22 +1658,14 @@ return function(ctx)
 				local lvl = pd.Level or 0
 				local assumedKg = getAssumedKg100(pd)
 				local baseW = pd.BaseWeight or 0
+				local reachedKg = (assumedKg >= maxKgThreshold) or (baseW >= targetW)
 				local satisfied = false
 
-				if activeStage == "XP" then
-					-- Selesai jika level >= xpTargetAge ATAU siap equip Elephant
-					if lvl >= xpTargetAge or lvl >= eleEquipAge then
-						satisfied = true
-					end
-				elseif activeStage == "Elephant" then
-					-- Selesai jika berat sudah capai target / max KG ATAU level sudah 500
-					if assumedKg >= maxKgThreshold or baseW >= targetW or lvl >= age500Target then
-						satisfied = true
-					end
-				elseif activeStage == "500 Age" then
-					-- Selesai jika level >= age500Target
-					if lvl >= age500Target then
-						satisfied = true
+				if reachedKg then
+					if a500Team then
+						if lvl >= age500Target then satisfied = true end
+					else
+						if lvl >= xpTargetAge then satisfied = true end
 					end
 				end
 
@@ -4576,14 +4579,35 @@ return function(ctx)
 end
 ]=],
 	["modules/growth/automation_growth.lua"] = [=[
---[[ growth.lua — Growth pipeline (BATCH per-step): jalankan target pet lewat urutan
-     step (default Elephant -> Mutation -> Leveling), semua pet kelar 1 step baru lanjut.
-     Config TERPISAH dari fitur standalone (growth*).
-     Step & kriteria "complete":
-       elephant : BaseWeight >= growthElephantWeight
-       mutation : dapat salah satu growthMutationTargets (aura team; mutasi salah -> shard)
-       leveling : Level >= growthLevP2Target (2 phase: P1 team -> P2 team)
-     Saat ganti step/phase: bersihin garden TOTAL dulu -> pasang team baru (lengkap) -> proses. ]]
+--[[ growth.lua — Growth pipeline (BATCH per-step / 3-Fase Workflow Loop):
+     Alur Kerja Final (Berlaku di Seluruh Fase):
+       [SISTEM DIMULAI]
+       ⬇️
+       FASE 1: LEVELING (Foreground)
+       - Aksi: Script men-leveling pet sampai Age 50 (menggunakan team Leveling).
+       - Background Monitor: Terus mengecek. "Apakah ada pet yang belum Age 50?
+         Apakah ada pet yang sudah memenuhi target KG (karena buff luar)?"
+       ⬇️ (Jika Age 50 tercapai)
+       FASE 2: ELEPHANT METHOD (Foreground)
+       - Aksi: Script mengeksekusi boost. KG +0.11, Age reset jadi 1.
+         Langsung otomatis masuk antrean Fase 1 lagi (berputar membentuk loop tak terbatas).
+       - Background Monitor: Tetap berjalan. Mengecek data KG terbaru di memori.
+         "Apakah SEMUA pet target sudah KG >= 38.45?"
+       ⬇️
+       (Loop Fase 1 <-> Fase 2 berjalan terus tanpa henti, TANPA PICK UP, sampai...)
+       ⬇️
+       TRIGGER (Intervensi dari Background)
+       - Background Monitor mendeteksi bahwa SELURUH pet target sudah mencapai KG >= 38.45
+         (atau tidak ada lagi pet Age 50 yang perlu di-boost).
+       - Aksi: Background mengirim sinyal "STOP" ke Pekerja Utama.
+       ⬇️
+       FASE 3: FINISHING & CLEANUP (Foreground)
+       - Aksi: Pekerja utama berhenti dari loop. Barulah sekarang ia boleh melakukan pick up tim.
+         Ia men-leveling sisa umur (dari Age 1) sampai batas aman, lalu men-unequip semua pet ke inventory.
+       - Background Monitor: Memastikan tidak ada pet yang tertinggal di slot garden (#eq == 0).
+       ⬇️
+       [SELESAI ✅]
+]]
 return function(ctx)
 	local DataService = ctx.deps.DataService
 	local PetsService = ctx.deps.PetsService
@@ -4593,7 +4617,7 @@ return function(ctx)
 	local PetShardService = RS:WaitForChild("GameEvents"):WaitForChild("PetShardService_RE")
 	local mutDisplay = (ctx.reg and ctx.reg.mutDisplay) or function(c) return c end
 
-	----------------------------------------------------------------- posisi grid
+	----------------------------------------------------------------- Posisi Grid & Alokasi Slot
 	local function farmCenter()
 		local GetFarm = require(RS.Modules.GetFarm)
 		local farm = GetFarm and GetFarm(LP)
@@ -4603,71 +4627,103 @@ return function(ctx)
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		return hrp and hrp.Position or nil
 	end
-	local slotOf, nextSlot = {}, 0
+
+	local slotOf = {}
+	local GRID_COLS, GRID_SP = 6, 3
+	local function allocateSlot(uuid)
+		if slotOf[uuid] then return slotOf[uuid] end
+		local used = {}
+		for _, s in pairs(slotOf) do used[s] = true end
+		local s = 0
+		while used[s] do s = s + 1 end
+		slotOf[uuid] = s
+		return s
+	end
+	local function releaseSlot(uuid)
+		slotOf[uuid] = nil
+	end
 	local function getPos(uuid)
-		if not slotOf[uuid] then slotOf[uuid] = nextSlot; nextSlot = nextSlot + 1 end
-		local center = farmCenter(); if not center then return nil end
-		local i = slotOf[uuid]
-		return center + Vector3.new((i % 6 - 2.5) * 3, 0, (math.floor(i / 6) - 1) * 3)
+		local s = allocateSlot(uuid)
+		local center = farmCenter()
+		if not center then return nil end
+		local col = s % GRID_COLS
+		local row = math.floor(s / GRID_COLS)
+		local offX = (col - (GRID_COLS - 1) / 2) * GRID_SP
+		local offZ = (row - 1) * GRID_SP
+		return center + Vector3.new(offX, 0, offZ)
 	end
 
-	----------------------------------------------------------------- helper mutasi/shard
-	-- pet yang di-favorite JANGAN diproses & JANGAN dihitung di step manapun
-	-- (elephant/mutation/leveling). Kalau ikut dihitung, pet fav yg ga pernah beres
-	-- bikin step "belum semua selesai" selamanya -> growth mandek.
+	----------------------------------------------------------------- Helper Klasifikasi & Rumus Weight
+	-- Pet yang di-favorite JANGAN diproses sebagai target pet (pet target WAJIB unfavorite).
+	-- Semua pet team WAJIB pet yang difavoritkan.
 	local function isFav(pd) return (pd or {}).IsFavorite == true end
+
+	local function filterFavTeam(rawTeam, inv)
+		local out = {}
+		for uuid in pairs(rawTeam or {}) do
+			local v = inv[uuid]
+			local pd = v and v.PetData
+			if pd and pd.IsFavorite then
+				out[uuid] = true
+			end
+		end
+		return out
+	end
+
 	local function matchesType(typeSet, pt, pd)
 		if ctx.petMatchesType then return ctx.petMatchesType(typeSet, pt, pd) end
 		return typeSet and typeSet[pt] == true
 	end
-	-- Flow efektif: buang step kosong/"none" (mis. cuma mau Mutation+Leveling, Step 3 dikosongin).
+
+	-- Flow efektif: filter step valid
 	local function effFlow()
-    	local out = {}
-    	local validSteps = {
-        	elephant = true,
-        	mutation = true,
-        	leveling = true,
-        	leveling_p1 = true,
-        	leveling_p2 = true,
-    	}
-    	for _, s in ipairs(CFG.growthFlow or {}) do
-        	if validSteps[s] then
-            	out[#out + 1] = s
-        	end
-    	end
-    	return out
+		local out = {}
+		local validSteps = {
+			elephant = true,
+			mutation = true,
+			leveling = true,
+			leveling_p1 = true,
+			leveling_p2 = true,
+		}
+		for _, s in ipairs(CFG.growthFlow or {}) do
+			if validSteps[s] then
+				out[#out + 1] = s
+			end
+		end
+		return out
 	end
-	-- Target pet PER-METHOD: tiap step bisa punya target beda (mis. leveling: Dilo/
-	-- Lion/Mimic, mutation: Hotdog/Griffin/Mimic). Kalau set per-step kosong ->
-	-- fallback ke growthPetTypes (global). Backward-compatible.
+
+	-- Target pet PER-METHOD (fallback ke global)
 	local function typesFor(step)
-    	local per
-    	if step == "elephant" then
-        	per = CFG.growthPetTypesElephant
-    	elseif step == "mutation" then
-        	per = CFG.growthPetTypesMutation
-    	elseif step == "leveling_p1" then
-        	per = CFG.growthPetTypesLeveling
-        	if not (per and next(per)) and CFG.growthPetTypesElephant and next(CFG.growthPetTypesElephant) then
-            	per = CFG.growthPetTypesElephant
-        	end
-    	elseif step == "leveling" or step == "leveling_p2" then
-        	per = CFG.growthPetTypesLeveling
-    	end
-    	if per and next(per) then return per end
-    	return CFG.growthPetTypes or {}
+		local per
+		if step == "elephant" then
+			per = CFG.growthPetTypesElephant
+		elseif step == "mutation" then
+			per = CFG.growthPetTypesMutation
+		elseif step == "leveling_p1" then
+			per = CFG.growthPetTypesLeveling
+			if not (per and next(per)) and CFG.growthPetTypesElephant and next(CFG.growthPetTypesElephant) then
+				per = CFG.growthPetTypesElephant
+			end
+		elseif step == "leveling" or step == "leveling_p2" then
+			per = CFG.growthPetTypesLeveling
+		end
+		if per and next(per) then return per end
+		return CFG.growthPetTypes or {}
 	end
-	-- ada target ke-set di mana pun (global / salah satu per-step)?
+
 	local function anyTypesSet()
 		if next(CFG.growthPetTypes or {}) then return true end
 		return next(CFG.growthPetTypesElephant or {}) or next(CFG.growthPetTypesMutation or {})
 			or next(CFG.growthPetTypesLeveling or {}) or false
 	end
+
 	local function mutOf(pd) return mutDisplay((pd or {}).MutationType) end
 	local function hasMut(pd)
 		local m = (pd or {}).MutationType
 		return m ~= nil and m ~= "" and m ~= "None" and m ~= "Normal"
 	end
+
 	local function findShard()
 		for _, where in ipairs({ LP.Character, LP:FindFirstChildOfClass("Backpack") }) do
 			if where then
@@ -4677,6 +4733,7 @@ return function(ctx)
 			end
 		end
 	end
+
 	local function findPetModel(uuid)
 		local pm = workspace:FindFirstChild("PetsPhysical")
 		if not pm then return nil end
@@ -4684,6 +4741,7 @@ return function(ctx)
 			local m = mover:FindFirstChild(uuid); if m then return m end
 		end
 	end
+
 	local function cleansePet(uuid)
 		local model = findPetModel(uuid); if not model then return end
 		local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
@@ -4705,7 +4763,6 @@ return function(ctx)
 			local n = math.max(1, tonumber(pd.Level or pd.Age) or 1)
 			local w = tonumber(pd.Weight) or 0
 			if w > 0 then
-				-- Wn = W1 * (1 + (n - 1) / 11) => W1 = Wn / (1 + (n - 1) / 11)
 				bw = w / (1 + (n - 1) / 11)
 			else
 				bw = 0
@@ -4765,7 +4822,6 @@ return function(ctx)
 		return true
 	end
 
-	----------------------------------------------------------------- kriteria complete per step
 	local function stepDone(step, pd)
 		pd = pd or {}
 		local lvl = pd.Level or 0
@@ -4800,20 +4856,9 @@ return function(ctx)
 		return true
 	end
 
-	local function petMeetsNextStep(currentStep, pd)
-		local flow = effFlow()
-		if #flow == 0 then return false end
-		local curIdx = ctx.state.growthStepIdx or 1
-		local nextIdx = curIdx + 1
-		if nextIdx > #flow then nextIdx = 1 end
-		local nextStep = flow[nextIdx]
-		if not nextStep or nextStep == currentStep then return false end
-		return petMeetsEquip(nextStep, pd)
-	end
-
+	----------------------------------------------------------------- Ringkasan Status untuk UI
 	ctx.state.growthStatus = "Idle"
 
-	----------------------------------------------------------------- ringkasan status
 	function ctx.getGrowthSummary()
 		local ok, d = pcall(function() return DataService:GetData() end)
 		local inv = ok and d and d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
@@ -4821,7 +4866,7 @@ return function(ctx)
 		local perStep = {}
 		for _, s in ipairs(flow) do perStep[s] = { done = 0, total = 0 } end
 		for _, v in pairs(inv) do
-			if not isFav(v.PetData) and v.PetData then   -- skip pet tanpa PetData
+			if not isFav(v.PetData) and v.PetData then
 				for _, s in ipairs(flow) do
 					if matchesType(typesFor(s), v.PetType, v.PetData) then
 						perStep[s].total = perStep[s].total + 1
@@ -4831,13 +4876,11 @@ return function(ctx)
 			end
 		end
 		local function nm(t) local o = {}; for k in pairs(t or {}) do o[#o + 1] = k end; return #o > 0 and table.concat(o, ", ") or "-" end
-		-- label target: kalau ada per-method di-set -> "E:.. | M:.. | L:..", else global.
 		local function typesLabel()
 			local e, m, l = CFG.growthPetTypesElephant or {}, CFG.growthPetTypesMutation or {}, CFG.growthPetTypesLeveling or {}
 			if not (next(e) or next(m) or next(l)) then return nm(CFG.growthPetTypes) end
 			return ("E:%s | M:%s | L:%s"):format(nm(typesFor("elephant")), nm(typesFor("mutation")), nm(typesFor("leveling")))
 		end
-		-- ringkas team: hitung per tipe pet -> "Peacock x3, Dog x2" (biar ga kepanjangan)
 		local function teamNm(teamSet)
 			local count, order, total = {}, {}, 0
 			for uuid in pairs(teamSet or {}) do
@@ -4867,7 +4910,55 @@ return function(ctx)
 		}
 	end
 
-	----------------------------------------------------------------- core check
+	----------------------------------------------------------------- Helper Garden Team Sync (TANPA PICK UP TARGET PET)
+	-- Swap tim aura di garden tanpa menyentuh pet target aktif di ctx.state.growthBatch.
+	local function syncGardenTeam(desiredTeam, localEq)
+		local batch = ctx.state.growthBatch or {}
+
+		-- 1. Lepas pet yang terpasang di garden jika bukan anggota desiredTeam DAN bukan anggota batch aktif
+		for uuid in pairs(localEq) do
+			if not batch[uuid] and not desiredTeam[uuid] then
+				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+				localEq[uuid] = nil
+				releaseSlot(uuid)
+				task.wait(0.1)
+			end
+		end
+
+		-- 2. Pasang pet desiredTeam yang belum terpasang
+		local allTeamEquipped = true
+		for uuid in pairs(desiredTeam) do
+			if not localEq[uuid] then
+				allTeamEquipped = false
+				local pos = getPos(uuid)
+				if pos then
+					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+					localEq[uuid] = true
+					task.wait(0.15)
+				end
+			end
+		end
+		return allTeamEquipped
+	end
+
+	-- Pastikan semua pet target batch aktif tetap terpasang di garden
+	local function syncBatchPets(localEq)
+		local allBatchEquipped = true
+		for uuid in pairs(ctx.state.growthBatch or {}) do
+			if not localEq[uuid] then
+				allBatchEquipped = false
+				local pos = getPos(uuid)
+				if pos then
+					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+					localEq[uuid] = true
+					task.wait(0.15)
+				end
+			end
+		end
+		return allBatchEquipped
+	end
+
+	----------------------------------------------------------------- Core Workflow Engine
 	local function checkGrowth()
 		local ok, d = pcall(function() return DataService:GetData() end)
 		if not ok or not d or not d.PetsData then return end
@@ -4879,338 +4970,372 @@ return function(ctx)
 			return
 		end
 
-		-- Evaluasi apakah suatu step masih memiliki pet kandidat yang butuh & bisa diproses
-		local function stepHasPendingPets(s)
-			local ty = typesFor(s)
-			for _, v in pairs(inv) do
-				local pd = v.PetData
-				if pd and not isFav(pd) and matchesType(ty, v.PetType, pd) then
-					if not stepDone(s, pd) and petMeetsEquip(s, pd) then
-						return true
-					end
-				end
-			end
-			return false
-		end
-
-		-- STEP AKTIF: Melacak urutan pipeline flow (Step 1 -> Step 2 -> Step 3 ...)
-		local curIdx = ctx.state.growthStepIdx or 1
-		if curIdx > #flow or curIdx < 1 then curIdx = 1 end
-
-		local step = nil
-		local stepIdx = nil
-		local searchCount = 0
-
-		while searchCount < #flow do
-			local s = flow[curIdx]
-			local hasActiveBatch = false
-			if ctx.state.growthBatch and next(ctx.state.growthBatch) and ctx.state.growthBatchStep == s then
-				hasActiveBatch = true
-			end
-
-			if hasActiveBatch or stepHasPendingPets(s) then
-				step = s
-				stepIdx = curIdx
-				break
-			else
-				-- Step ini sudah tidak ada lagi pet yang memenuhi syarat -> lanjut ke step berikutnya!
-				curIdx = curIdx + 1
-				if curIdx > #flow then
-					curIdx = 1
-				end
-				searchCount = searchCount + 1
-			end
-		end
-
-		if not step then
-			ctx.state.growthStep = "SELESAI"
-			ctx.state.growthStatus = "Growth: semua step selesai ✓"
-			if ctx.state.growthClearKey ~= "__done" then
-				ctx.state.growthClearKey = "__done"
-				if ctx.clearGarden then ctx.clearGarden("Growth") end
-			end
-			return
-		end
-
-		ctx.state.growthStepIdx = stepIdx
-		ctx.state.growthBatchStep = step
-
-		-- target pet buat step aktif ini (per-method / fallback global)
-		local types = typesFor(step)
-
-		-- team / max / kriteria "masih perlu diproses" untuk step ini
-		local team, maxPets, needsWork
-		local levPhase2 = false
-		local stepLabel = ("Step %d: %s"):format(stepIdx, step)
-
-		if step == "elephant" then
-			team, maxPets = CFG.growthElephantTeam or {}, CFG.growthElephantMax or 2
-			needsWork = function(pd)
-				return not stepDone("elephant", pd) and petMeetsEquip("elephant", pd)
-			end
-		elseif step == "mutation" then
-			team, maxPets = CFG.growthMutationTeam or {}, CFG.growthMutationMax or 2
-			needsWork = function(pd)
-				return not stepDone("mutation", pd) and petMeetsEquip("mutation", pd)
-			end
-		elseif step == "leveling_p1" then
-			team, maxPets = CFG.growthLevP1Team or {}, CFG.growthLevP1Max or 3
-			stepLabel = stepLabel .. " (Phase 1)"
-			needsWork = function(pd)
-				return not stepDone("leveling_p1", pd) and petMeetsEquip("leveling_p1", pd)
-			end
-		elseif step == "leveling_p2" then
-			team, maxPets = CFG.growthLevP2Team or {}, CFG.growthLevP2Max or 1
-			stepLabel = stepLabel .. " (Phase 2)"
-			needsWork = function(pd)
-				return not stepDone("leveling_p2", pd) and petMeetsEquip("leveling_p2", pd)
-			end
-			levPhase2 = true
-		else -- step == "leveling" (auto phase)
-			local p1t = CFG.growthLevP1UnequipAge or CFG.growthLevP1Target or 50
-			local phase1 = false
-			for _, v in pairs(inv) do
-				if matchesType(types, v.PetType, v.PetData) and not isFav(v.PetData) and not stepDone("leveling_p1", v.PetData) and ((v.PetData or {}).Level or 0) < p1t then
-					phase1 = true
-					break
-				end
-			end
-			if phase1 then
-				team, maxPets = CFG.growthLevP1Team or {}, CFG.growthLevP1Max or 3
-				stepLabel = stepLabel .. " (Phase 1)"
-				needsWork = function(pd) return not stepDone("leveling_p1", pd) and petMeetsEquip("leveling_p1", pd) end
-			else
-				team, maxPets = CFG.growthLevP2Team or {}, CFG.growthLevP2Max or 1
-				stepLabel = stepLabel .. " (Phase 2)"
-				needsWork = function(pd) return not stepDone("leveling_p2", pd) and petMeetsEquip("leveling_p2", pd) end
-				levPhase2 = true
-			end
-		end
-		ctx.state.growthStep = stepLabel
-
-		-- Kirim webhook "enabled" SEKALI pas MASUK step baru (mis. enable -> elephant duluan).
-		if ctx.state.growthLastStepName ~= step then
-			ctx.state.growthLastStepName = step
-			if step == "elephant" and ctx.webhookElephant and ctx.webhookElephant.sendEnabled then
-				pcall(function() ctx.webhookElephant.sendEnabled(ctx) end)
-			end
-			-- leveling: TIDAK kirim webhook "enabled" pas masuk step; cuma pas pet beres (sendFinished).
-			-- mutation (aura/cleanse) ga punya sendEnabled -> notif cuma per pet dapat mutasi
-		end
-
 		local localEq = {}
 		for _, uuid in ipairs(eq) do localEq[uuid] = true end
 
-		-- Transisi step/phase -> bersihin garden TOTAL dulu (verified kosong).
-		if ctx.state.growthClearKey ~= nil and ctx.state.growthClearKey ~= stepLabel then
-			ctx.state.growthClearing = true
-		end
-		ctx.state.growthClearKey = stepLabel
-		if ctx.state.growthFirstRun or ctx.state.growthClearing then
+		-- FIRST RUN: Bersihkan garden total sekali saja saat start
+		if ctx.state.growthFirstRun then
 			if #eq > 0 then
-				ctx.state.growthStatus = ("%s: bersihin garden (%d pet)..."):format(stepLabel, #eq)
+				ctx.state.growthStatus = ("Growth: membersihkan garden awal (%d pet)..."):format(#eq)
 				for _, uuid in ipairs(eq) do
 					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+					releaseSlot(uuid)
 					task.wait(0.1)
 				end
 				return
 			end
 			ctx.state.growthFirstRun = false
-			ctx.state.growthClearing = false
 		end
 
-		-- Pasang team step ini + PASTIKAN LENGKAP dulu.
-		local teamComplete = true
-		for uuid in pairs(team) do
-			if not localEq[uuid] then
-				teamComplete = false
-				local pos = getPos(uuid)
-				if pos then
-					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
-					task.wait(0.15)
-				end
-			end
-		end
-		if not teamComplete then
-			ctx.state.growthStatus = stepLabel .. ": nunggu team lengkap..."
-			return
+		-- Inisialisasi konfigurasi threshold
+		local targetKg = tonumber(CFG.growthElephantKgMax) or 38.45
+		if targetKg <= 0 then targetKg = 38.45 end
+		local eleEquipAge = tonumber(CFG.growthElephantEquipAge) or 50
+		if eleEquipAge <= 0 then eleEquipAge = 50 end
+
+		-- Cek apakah flow memiliki Phase 2 leveling (500 Age)
+		local hasLevP2 = false
+		for _, s in ipairs(flow) do
+			if s == "leveling_p2" then hasLevP2 = true break end
 		end
 
-		-- Inisialisasi batch sesi jika belum ada
+		local safeUnequipAge
+		local finishingTeam
+		local finishingLabel
+		if hasLevP2 and CFG.growthLevP2Team and next(CFG.growthLevP2Team) then
+			safeUnequipAge = tonumber(CFG.growthLevP2Target) or 500
+			finishingTeam = filterFavTeam(CFG.growthLevP2Team, inv)
+			finishingLabel = "Phase 2 (500 Age)"
+		else
+			safeUnequipAge = tonumber(CFG.growthLevP1UnequipAge) or tonumber(CFG.growthLevP1Target) or 50
+			finishingTeam = filterFavTeam(CFG.growthLevP1Team, inv)
+			finishingLabel = "Phase 1"
+		end
+		if safeUnequipAge <= 0 then safeUnequipAge = 50 end
+
 		ctx.state.growthBatch = ctx.state.growthBatch or {}
 
-		-- Bersihkan pet ilegal dari garden (favorite, bukan team, atau bukan bagian batch sesi aktif)
-		for uuid in pairs(localEq) do
-			if not team[uuid] then
-				local v = inv[uuid]
-				local pd = v and v.PetData
-				if not pd or pd.IsFavorite or not matchesType(types, v.PetType, pd) or (not ctx.state.growthBatch[uuid] and next(ctx.state.growthBatch)) then
-					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-					localEq[uuid] = nil
-					ctx.state.growthBatch[uuid] = nil
-					task.wait(0.1)
-				end
-			end
-		end
-
-		-- Periksa status kelulusan batch sesi aktif:
-		-- "setiap sesi flow (elephant/leveling) semua pet persesi sampai memenuhi target syarat unequip
-		--  atau memenuhi target equip tahap selanjutnya baru pindah ke sesi selanjutnya equip"
+		-------------------------------------------------------------
+		-- BACKGROUND MONITOR: EVALUASI PET TARGET DI MEMORI
+		-------------------------------------------------------------
 		local batchCount = 0
-		local allSatisfied = true
+		local allReachedTargetKg = true
+		local allAge50 = true
+		local allResetToAge1 = true
+		local allSafeAge = true
 
 		for uuid in pairs(ctx.state.growthBatch) do
 			local v = inv[uuid]
 			local pd = v and v.PetData
-			if not pd then
+			if not pd or pd.IsFavorite then
+				-- Pet hilang atau difavoritkan -> hapus dari batch aktif
 				ctx.state.growthBatch[uuid] = nil
+				if localEq[uuid] then
+					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+					localEq[uuid] = nil
+					releaseSlot(uuid)
+				end
 			else
 				batchCount = batchCount + 1
-				-- Handle cleansing jika mutation step
-				if step == "mutation" and hasMut(pd) and not (CFG.growthMutationTargets or {})[mutOf(pd)] then
-					cleansePet(uuid)
+				local assumedKg = getAssumedKg100(pd)
+				local lvl = pd.Level or 0
+
+				-- Background Monitor: Apakah SEMUA pet target sudah KG >= 38.45?
+				if assumedKg < targetKg then
+					allReachedTargetKg = false
 				end
-				local isDone = stepDone(step, pd)
-				if step == "elephant" and (pd.Level or 0) < (CFG.growthElephantEquipAge or 50) then
-					isDone = true
+
+				-- Background Monitor: Apakah ada pet yang belum Age 50?
+				if lvl < eleEquipAge then
+					allAge50 = false
 				end
-				local nextReady = petMeetsNextStep(step, pd)
-				if not (isDone or nextReady) then
-					allSatisfied = false
+
+				-- Background Monitor: Apakah umur sudah ter-reset ke 1 setelah boost Elephant?
+				if lvl >= eleEquipAge then
+					allResetToAge1 = false
+				end
+
+				-- Background Monitor: Apakah pet sudah mencapai batas aman unequip?
+				if lvl < safeUnequipAge then
+					allSafeAge = false
 				end
 			end
 		end
 
-		-- Jika ada batch aktif dan BELUM SEMUA memenuhi syarat: TAHAN semua pet di garden!
-		if batchCount > 0 and not allSatisfied then
-			-- Pastikan pet batch yang belum ter-equip tetap dipasang
-			for uuid in pairs(ctx.state.growthBatch) do
-				if not localEq[uuid] then
-					local pos = getPos(uuid)
-					if pos then
-						pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
-						localEq[uuid] = true
-						task.wait(0.15)
-					end
-				end
-			end
-			ctx.state.growthStatus = ("%s: %d/%d aktif (tahan bareng sampai semua selesai)..."):format(stepLabel, batchCount, maxPets)
-			return
-		end
+		-------------------------------------------------------------
+		-- KASUS 1: BELUM ADA BATCH AKTIF (batchCount == 0)
+		-------------------------------------------------------------
+		if batchCount == 0 then
+			local eleTypes = typesFor("elephant")
+			local levTypes = typesFor("leveling")
+			local defTypes = CFG.growthPetTypes or {}
+			local pool = {}
 
-		-- Jika ada batch aktif dan SEMUA sudah memenuhi syarat: LULUSKAN SEMUA BERSAMA-SAMA!
-		if batchCount > 0 and allSatisfied then
-			for uuid in pairs(ctx.state.growthBatch) do
-				local v = inv[uuid]
-				local pd = v and v.PetData
-				local pt = v and v.PetType or "Unknown"
-				if step == "elephant" and ctx.webhookElephant then
-					local dur
-					if ctx.state.growthElephantStart and ctx.state.growthElephantStart[uuid] then
-						dur = os.time() - ctx.state.growthElephantStart[uuid]
-						ctx.state.growthElephantStart[uuid] = nil
+			for uuid, v in pairs(inv) do
+				local pd = v.PetData
+				if pd and not pd.IsFavorite and not localEq[uuid] then
+					if matchesType(eleTypes, v.PetType, pd) or matchesType(levTypes, v.PetType, pd) or matchesType(defTypes, v.PetType, pd) then
+						local assumedKg = getAssumedKg100(pd)
+						if assumedKg < targetKg then
+							table.insert(pool, { uuid = uuid, assumedKg = assumedKg, lvl = pd.Level or 0 })
+						end
 					end
-					if ctx.webhookElephant.onFinished then pcall(function() ctx.webhookElephant.onFinished(ctx, pt, pd and pd.BaseWeight or 0) end) end
-					if ctx.webhookElephant.sendFinished then
-						pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
-					end
-				elseif (step == "leveling" or step == "leveling_p2") and ctx.webhookLeveling and ctx.webhookLeveling.sendFinished then
-					local dur
-					if ctx.state.growthLevStart and ctx.state.growthLevStart[uuid] then
-						dur = os.time() - ctx.state.growthLevStart[uuid]
-						ctx.state.growthLevStart[uuid] = nil
-					end
-					pcall(function() ctx.webhookLeveling.sendFinished(ctx, pt, pd and mutOf(pd), pd and pd.Level or 0, dur, 0) end)
-				elseif step == "mutation" and ctx.webhookCleanse and ctx.webhookCleanse.sendObtained then
-					pcall(function() ctx.webhookCleanse.sendObtained(ctx, pt, pd and mutOf(pd), pd and pd.Level or 0, 0) end)
 				end
-				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				localEq[uuid] = nil
-				task.wait(0.1)
 			end
+
+			if #pool == 0 then
+				-- [SELESAI ✅] Seluruh pet target sudah mencapai target KG!
+				ctx.state.growthStep = "SELESAI"
+				ctx.state.growthStatus = "Growth: semua pet target sudah mencapai target KG ✓"
+				if #eq > 0 then
+					for _, u in ipairs(eq) do
+						pcall(function() PetsService:FireServer("UnequipPet", u) end)
+						releaseSlot(u)
+						task.wait(0.1)
+					end
+				end
+				return
+			end
+
+			-- Urutkan pool berdasarkan assumedKg (pet dengan berat terdekat diproses bersamaan)
+			table.sort(pool, function(a, b) return a.assumedKg < b.assumedKg end)
+
+			local maxBatch = tonumber(CFG.growthElephantMax) or tonumber(CFG.growthLevP1Max) or 2
+			local toTake = math.min(maxBatch, #pool)
 			ctx.state.growthBatch = {}
-			ctx.state.growthClearing = true
-			ctx.state.growthStatus = ("%s: sesi selesai, semua pet lulus bareng ✓"):format(stepLabel)
-			return
-		end
+			ctx.state.growthBatchStartTime = ctx.state.growthBatchStartTime or {}
 
-		-- Jika belum ada batch aktif (batchCount == 0): ambil pet target baru sampai maxPets
-		local pool = {}
-		for uuid, v in pairs(inv) do
-			local pd = v.PetData
-			if not localEq[uuid] and matchesType(types, v.PetType, pd) and pd
-				and not pd.IsFavorite and needsWork(pd) and petMeetsEquip(step, pd) then
-				local sortKey = pd.Level or 0
-				if step == "elephant" then sortKey = pd.BaseWeight or 0 end
-				table.insert(pool, { uuid = uuid, key = sortKey })
-			end
-		end
-		table.sort(pool, function(a, b) return a.key < b.key end)
-
-		local toEquip = math.min(maxPets, #pool)
-		if toEquip > 0 then
-			for i = 1, toEquip do
-				local targetUuid = pool[i].uuid
-				local pos = getPos(targetUuid)
+			for i = 1, toTake do
+				local u = pool[i].uuid
+				ctx.state.growthBatch[u] = true
+				ctx.state.growthBatchStartTime[u] = os.time()
+				local pos = getPos(u)
 				if pos then
-					pcall(function() PetsService:FireServer("EquipPet", targetUuid, CFrame.new(pos)) end)
-					localEq[targetUuid] = true
-					ctx.state.growthBatch[targetUuid] = true
-					if step == "elephant" then
-						ctx.state.growthElephantStart = ctx.state.growthElephantStart or {}
-						ctx.state.growthElephantStart[targetUuid] = os.time()
-					elseif (step == "leveling" or step == "leveling_p2") and levPhase2 then
-						ctx.state.growthLevStart = ctx.state.growthLevStart or {}
-						ctx.state.growthLevStart[targetUuid] = os.time()
-					end
+					pcall(function() PetsService:FireServer("EquipPet", u, CFrame.new(pos)) end)
+					localEq[u] = true
 					task.wait(0.15)
 				end
 			end
-			ctx.state.growthStatus = ("%s: %d/%d aktif dimulai"):format(stepLabel, toEquip, maxPets)
+
+			ctx.state.growthStopLoop = false
+			ctx.state.growthBatchStage = "fase1_leveling"
+			ctx.state.growthStatus = ("Growth: memulai batch baru (%d pet target)..."):format(toTake)
+			return
+		end
+
+		-- Pastikan pet target batch aktif tetap terpasang di garden
+		syncBatchPets(localEq)
+
+		-------------------------------------------------------------
+		-- TRIGGER INTERVENSI DARI BACKGROUND MONITOR
+		-------------------------------------------------------------
+		-- Background Monitor mendeteksi bahwa SELURUH pet target sudah mencapai KG >= 38.45.
+		-- Aksi: Background mengirim sinyal "STOP" ke Pekerja Utama -> masuk Fase 3.
+		if allReachedTargetKg then
+			ctx.state.growthStopLoop = true
+			ctx.state.growthBatchStage = "fase3_finishing"
+		end
+
+		-------------------------------------------------------------
+		-- EKSEKUSI FASE WORKFLOW
+		-------------------------------------------------------------
+		if ctx.state.growthStopLoop or ctx.state.growthBatchStage == "fase3_finishing" then
+			---------------------------------------------------------
+			-- FASE 3: FINISHING & CLEANUP (Foreground)
+			---------------------------------------------------------
+			-- Pekerja utama berhenti dari loop boost.
+			-- Pet saat ini berada di Age 1 (efek boost elephant terakhir).
+			-- Tim Leveling dipasang untuk menaikkan sisa umur sampai batas aman.
+			local teamReady = syncGardenTeam(finishingTeam, localEq)
+			if not teamReady then
+				ctx.state.growthStatus = ("[Fase 3] Finishing (%s): nunggu tim lengkap..."):format(finishingLabel)
+				return
+			end
+
+			if not allSafeAge then
+				ctx.state.growthStep = ("Fase 3: Finishing (%s)"):format(finishingLabel)
+				local ages = {}
+				for u in pairs(ctx.state.growthBatch) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					table.insert(ages, tostring(pd and pd.Level or 0) .. "/" .. tostring(safeUnequipAge))
+				end
+				ctx.state.growthStatus = ("[Fase 3] Finishing: leveling sisa umur %s ke batas aman..."):format(table.concat(ages, ", "))
+				return
+			end
+
+			-- Batas aman tercapai:
+			-- "Barulah sekarang ia boleh melakukan pick up tim ... lalu men-unequip semua pet ke inventory."
+			ctx.state.growthStatus = "[Fase 3] Finishing: unequip pet target ke inventory..."
+			for u in pairs(ctx.state.growthBatch) do
+				local v = inv[u]
+				local pd = v and v.PetData
+				local pt = v and v.PetType or "Unknown"
+				local dur = 0
+				if ctx.state.growthBatchStartTime and ctx.state.growthBatchStartTime[u] then
+					dur = os.time() - ctx.state.growthBatchStartTime[u]
+					ctx.state.growthBatchStartTime[u] = nil
+				end
+				if ctx.webhookElephant and ctx.webhookElephant.sendFinished then
+					pcall(function() ctx.webhookElephant.sendFinished(ctx, pt, pd and pd.BaseWeight or 0, pd and pd.MutationType, pd and pd.Level or 0, dur) end)
+				end
+				if ctx.webhookLeveling and ctx.webhookLeveling.sendFinished then
+					pcall(function() ctx.webhookLeveling.sendFinished(ctx, pt, pd and mutOf(pd), pd and pd.Level or 0, dur, 0) end)
+				end
+				pcall(function() PetsService:FireServer("UnequipPet", u) end)
+				localEq[u] = nil
+				releaseSlot(u)
+				task.wait(0.15)
+			end
+
+			-- Unequip pet tim di garden agar slot bersih total
+			for u in pairs(finishingTeam) do
+				pcall(function() PetsService:FireServer("UnequipPet", u) end)
+				localEq[u] = nil
+				releaseSlot(u)
+				task.wait(0.1)
+			end
+
+			-- Background Monitor: Memastikan tidak ada pet yang tertinggal di slot garden
+			local ok2, d2 = pcall(function() return DataService:GetData() end)
+			local eq2 = (ok2 and d2 and d2.PetsData and d2.PetsData.EquippedPets) or {}
+			for _, u in ipairs(eq2) do
+				pcall(function() PetsService:FireServer("UnequipPet", u) end)
+				releaseSlot(u)
+				task.wait(0.1)
+			end
+
+			ctx.state.growthBatch = {}
+			ctx.state.growthBatchStage = nil
+			ctx.state.growthStopLoop = false
+			ctx.state.growthStatus = "Growth: batch selesai & dibersihkan ✓, cek antrean..."
+			return
+
 		else
-			ctx.state.growthStatus = ("%s: tidak ada pet kandidat yang memenuhi syarat equip"):format(stepLabel)
+			---------------------------------------------------------
+			-- LOOP FASE 1 <-> FASE 2 (BERPUTAR TERUS TANPA PICK UP)
+			---------------------------------------------------------
+			-- Evaluasi transisi state loop
+			if ctx.state.growthBatchStage == "fase2_elephant" then
+				-- Jika sedang di Fase 2 dan SEMUA pet sudah ter-reset umurnya ke < 50:
+				-- Berarti boost Elephant sudah mendarat!
+				if allResetToAge1 then
+					if allReachedTargetKg then
+						ctx.state.growthStopLoop = true
+						ctx.state.growthBatchStage = "fase3_finishing"
+						return
+					else
+						-- Masuk antrean Fase 1 lagi (looping tanpa pick up)
+						ctx.state.growthBatchStage = "fase1_leveling"
+					end
+				end
+			elseif ctx.state.growthBatchStage == "fase1_leveling" then
+				-- Jika sedang di Fase 1 dan SEMUA pet sudah mencapai Age 50:
+				if allAge50 then
+					-- Masuk ke Fase 2: Elephant boost
+					ctx.state.growthBatchStage = "fase2_elephant"
+				end
+			else
+				ctx.state.growthBatchStage = "fase1_leveling"
+			end
+
+			-- EKSEKUSI FOREGROUND SESUAI FASE AKTIF:
+			if ctx.state.growthBatchStage == "fase1_leveling" then
+				-----------------------------------------------------
+				-- FASE 1: LEVELING (Foreground)
+				-----------------------------------------------------
+				ctx.state.growthStep = "Fase 1: Leveling (Age -> 50)"
+				local levTeam = filterFavTeam(CFG.growthLevP1Team, inv)
+
+				-- Swap tim aura ke tim Leveling.
+				-- PET TARGET DI ctx.state.growthBatch TETAP DIPERTAHANKAN (TANPA PICK UP!)
+				local teamReady = syncGardenTeam(levTeam, localEq)
+				if not teamReady then
+					ctx.state.growthStatus = "[Fase 1] Leveling: nunggu tim Leveling lengkap..."
+					return
+				end
+
+				local ages = {}
+				for u in pairs(ctx.state.growthBatch) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					table.insert(ages, tostring(pd and pd.Level or 0) .. "/" .. tostring(eleEquipAge))
+				end
+				ctx.state.growthStatus = ("[Fase 1] Leveling umur: %s (loop tanpa pick up)"):format(table.concat(ages, ", "))
+				return
+
+			elseif ctx.state.growthBatchStage == "fase2_elephant" then
+				-----------------------------------------------------
+				-- FASE 2: ELEPHANT METHOD (Foreground)
+				-----------------------------------------------------
+				ctx.state.growthStep = "Fase 2: Elephant Boost (+0.11 KG)"
+				local eleTeam = filterFavTeam(CFG.growthElephantTeam, inv)
+
+				-- Swap tim aura ke tim Elephant.
+				-- PET TARGET DI ctx.state.growthBatch TETAP DIPERTAHANKAN (TANPA PICK UP!)
+				local teamReady = syncGardenTeam(eleTeam, localEq)
+				if not teamReady then
+					ctx.state.growthStatus = "[Fase 2] Elephant: nunggu tim Elephant lengkap..."
+					return
+				end
+
+				-- Webhook notification saat masuk Elephant
+				if ctx.state.growthLastStepName ~= "elephant" then
+					ctx.state.growthLastStepName = "elephant"
+					if ctx.webhookElephant and ctx.webhookElephant.sendEnabled then
+						pcall(function() ctx.webhookElephant.sendEnabled(ctx) end)
+					end
+				end
+
+				local weights = {}
+				for u in pairs(ctx.state.growthBatch) do
+					local v = inv[u]
+					local pd = v and v.PetData
+					local bw = pd and pd.BaseWeight or 0
+					local assumed = getAssumedKg100(pd)
+					table.insert(weights, string.format("%.2f (assumed %.2f/%.2f)", bw, assumed, targetKg))
+				end
+				ctx.state.growthStatus = ("[Fase 2] Elephant aktif: menanti boost +0.11 KG (%s)..."):format(table.concat(weights, ", "))
+				return
+			end
 		end
 	end
 
-	----------------------------------------------------------------- loop
+	----------------------------------------------------------------- Lifecycle Loop
 	local function growthLoop()
 		ctx.state.growthId = (ctx.state.growthId or 0) + 1
 		local myId = ctx.state.growthId
 		ctx.elevate()
 		ctx.state.growthFirstRun = true
-		ctx.state.growthClearKey = nil
 		while CFG.growthEnabled and ctx.alive() and ctx.state.growthId == myId do
 			pcall(checkGrowth)
-			-- pas bersihin/transisi -> cek cepat (1s) biar garden cepat bersih & lanjut;
-			-- steady (proses grow/level) -> 2s (hemat, toh pet numbuh di server).
-			task.wait((ctx.state.growthClearing or ctx.state.growthFirstRun) and 0.5 or 2)
+			task.wait(1.5)
 		end
 		ctx.state.growthStatus = "Idle"
 	end
 
 	function ctx.startGrowth()
 		if ctx.cancelClearGarden then ctx.cancelClearGarden() end
-		-- override config webhook elephant -> baca config GROWTH (bukan standalone)
 		ctx.state.elephantCfgOverride = { team = CFG.growthElephantTeam, types = CFG.growthPetTypes, weight = CFG.growthElephantWeight }
-		ctx.state.elephantWebhookPost = true -- Growth: POST pesan baru tiap pet selesai (bukan edit)
-		ctx.state.growthLastStepName = nil -- reset biar step pertama kirim webhook "enabled"
-		ctx.state.growthCyclePhase = nil
-		ctx.state.growthStepIdx = 1
+		ctx.state.elephantWebhookPost = true
+		ctx.state.growthLastStepName = nil
 		ctx.state.growthBatch = {}
-		ctx.state.growthBatchStep = nil
+		ctx.state.growthBatchStage = nil
+		ctx.state.growthStopLoop = false
 		task.spawn(growthLoop)
 	end
+
 	function ctx.stopGrowth()
 		ctx.state.growthId = (ctx.state.growthId or 0) + 1
-		ctx.state.elephantCfgOverride = nil -- balikin webhook elephant ke config standalone
-		ctx.state.elephantWebhookPost = nil -- balikin webhook elephant ke mode edit (standalone)
-		ctx.state.growthCyclePhase = nil
-		ctx.state.growthStepIdx = nil
+		ctx.state.elephantCfgOverride = nil
+		ctx.state.elephantWebhookPost = nil
 		ctx.state.growthBatch = {}
-		ctx.state.growthBatchStep = nil
+		ctx.state.growthBatchStage = nil
+		ctx.state.growthStopLoop = false
 		if ctx.clearGarden then ctx.clearGarden("Growth") end
 	end
-end]=],
+end
+]=],
 	["modules/hatch/automation_hatch.lua"] = [=[
 --[[ hatch.lua — Auto Hatch + Auto Sell (Stage 1).
      - Team-swap dengan GUARD: team ga diproses kalau yg ke-equip udah sesuai.

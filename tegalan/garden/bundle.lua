@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-12T17:46:42.657Z
+-- 44 modul, di-generate 2026-11-13T00:46:17.530Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -4723,25 +4723,43 @@ return function(ctx)
 			local minAge = CFG.growthElephantEquipAge or 50
 			if minAge > 0 and lvl < minAge then return false end
 			local kgMin = CFG.growthElephantKgMin or -38.45
-			if kgMin ~= 0 and assumedKg < kgMin then return false end
+			if kgMin > 0 and assumedKg < kgMin then return false end
+			local kgMax = CFG.growthElephantKgMax or 38.45
+			if kgMax > 0 and assumedKg >= kgMax then return false end
+			local unequipAge = CFG.growthElephantUnequipAge or 0
+			if unequipAge > 0 and lvl >= unequipAge then return false end
 			return true
 		elseif step == "mutation" then
 			local minAge = CFG.growthMutationEquipAge or 0
 			if minAge > 0 and lvl < minAge then return false end
 			local kgMin = CFG.growthMutationKgMin or 0
-			if kgMin ~= 0 and assumedKg < kgMin then return false end
+			if kgMin > 0 and assumedKg < kgMin then return false end
+			local kgMax = CFG.growthMutationKgMax or 0
+			if kgMax > 0 and assumedKg >= kgMax then return false end
+			local unequipAge = CFG.growthMutationUnequipAge or 0
+			if unequipAge > 0 and lvl >= unequipAge then return false end
+			local tg = CFG.growthMutationTargets or {}
+			if next(tg) and tg[mutOf(pd)] == true then return false end
 			return true
 		elseif step == "leveling_p1" then
 			local minAge = CFG.growthLevP1EquipAge or 0
 			if minAge > 0 and lvl < minAge then return false end
 			local kgMin = CFG.growthLevP1KgMin or 0
-			if kgMin ~= 0 and assumedKg < kgMin then return false end
+			if kgMin > 0 and assumedKg < kgMin then return false end
+			local kgMax = CFG.growthLevP1KgMax or 0
+			if kgMax > 0 and assumedKg >= kgMax then return false end
+			local unequipAge = CFG.growthLevP1UnequipAge or CFG.growthLevP1Target or 50
+			if unequipAge > 0 and lvl >= unequipAge then return false end
 			return true
 		elseif step == "leveling_p2" or step == "leveling" then
 			local minAge = CFG.growthLevP2EquipAge or 50
 			if minAge > 0 and lvl < minAge then return false end
 			local kgMin = CFG.growthLevP2KgMin or 0
-			if kgMin ~= 0 and assumedKg < kgMin then return false end
+			if kgMin > 0 and assumedKg < kgMin then return false end
+			local kgMax = CFG.growthLevP2KgMax or 0
+			if kgMax > 0 and assumedKg >= kgMax then return false end
+			local unequipAge = CFG.growthLevP2UnequipAge or CFG.growthLevP2Target or 500
+			if unequipAge > 0 and lvl >= unequipAge then return false end
 			return true
 		end
 		return true
@@ -4752,15 +4770,12 @@ return function(ctx)
 		pd = pd or {}
 		local lvl = pd.Level or 0
 		local assumedKg = getAssumedKg100(pd)
-		local baseW = pd.BaseWeight or 0
 		if step == "elephant" then
 			local unequipAge = CFG.growthElephantUnequipAge or 0
 			if unequipAge > 0 and lvl >= unequipAge then return true end
 			local unequipKgMax = CFG.growthElephantKgMax or 38.45
-			if unequipKgMax > 0 and (assumedKg >= unequipKgMax or baseW >= (CFG.growthElephantWeight or 3.845)) then
-				return true
-			end
-			return baseW >= (CFG.growthElephantWeight or 3.845)
+			if unequipKgMax > 0 and assumedKg >= unequipKgMax then return true end
+			return false
 		elseif step == "mutation" then
 			local unequipAge = CFG.growthMutationUnequipAge or 0
 			if unequipAge > 0 and lvl >= unequipAge then return true end
@@ -4787,14 +4802,12 @@ return function(ctx)
 
 	local function petMeetsNextStep(currentStep, pd)
 		local flow = effFlow()
-		local nextStep
-		for idx, s in ipairs(flow) do
-			if s == currentStep then
-				nextStep = flow[idx + 1]
-				break
-			end
-		end
-		if not nextStep then return false end
+		if #flow == 0 then return false end
+		local curIdx = ctx.state.growthStepIdx or 1
+		local nextIdx = curIdx + 1
+		if nextIdx > #flow then nextIdx = 1 end
+		local nextStep = flow[nextIdx]
+		if not nextStep or nextStep == currentStep then return false end
 		return petMeetsEquip(nextStep, pd)
 	end
 
@@ -4866,172 +4879,110 @@ return function(ctx)
 			return
 		end
 
-		-- STEP AKTIF = step pertama di flow yg belum selesai.
-		-- Flow yang umum: leveling_p1 -> elephant -> leveling / mutation
-		-- Di tahap elephant, pet levelnya ter-reset (level turun). Setelah semua pet level 50
-		-- di-boost elephant dan levelnya reset, elephant tidak ada lagi target siap (level 50).
-		-- Jika masih ada target pet yang belum capai target weight, sistem otomatis balik ke leveling_p1.
-		local step, stepIdx
-		local p1Target = CFG.growthLevP1Target or 50
-		local hasElephantInFlow = false
-		local hasLevP1InFlow = false
-		for _, s in ipairs(flow) do
-			if s == "elephant" then hasElephantInFlow = true end
-			if s == "leveling_p1" then hasLevP1InFlow = true end
+		-- Evaluasi apakah suatu step masih memiliki pet kandidat yang butuh & bisa diproses
+		local function stepHasPendingPets(s)
+			local ty = typesFor(s)
+			for _, v in pairs(inv) do
+				local pd = v.PetData
+				if pd and not isFav(pd) and matchesType(ty, v.PetType, pd) then
+					if not stepDone(s, pd) and petMeetsEquip(s, pd) then
+						return true
+					end
+				end
+			end
+			return false
 		end
 
-		-- Jika flow mengandung siklus leveling_p1 + elephant:
-		if hasElephantInFlow and hasLevP1InFlow then
-			local tyEle = typesFor("elephant")
-			local tyP1 = typesFor("leveling_p1")
+		-- STEP AKTIF: Melacak urutan pipeline flow (Step 1 -> Step 2 -> Step 3 ...)
+		local curIdx = ctx.state.growthStepIdx or 1
+		if curIdx > #flow or curIdx < 1 then curIdx = 1 end
 
-			local anyNeedWeight = false
-			local anyReadyLevel50 = false
-			local anyNeedLevel50 = false
+		local step = nil
+		local stepIdx = nil
+		local searchCount = 0
 
-			for _, v in pairs(inv) do
-				if v.PetData and not isFav(v.PetData) then
-					local pd = v.PetData
-					local lvl = pd.Level or 0
-					-- Cek apakah pet target elephant butuh up weight
-					if (matchesType(tyEle, v.PetType, pd) or matchesType(tyP1, v.PetType, pd)) and not stepDone("elephant", pd) then
-						anyNeedWeight = true
-						if lvl >= p1Target then
-							anyReadyLevel50 = true
-						else
-							anyNeedLevel50 = true
-						end
-					end
-				end
+		while searchCount < #flow do
+			local s = flow[curIdx]
+			local hasActiveBatch = false
+			if ctx.state.growthBatch and next(ctx.state.growthBatch) and ctx.state.growthBatchStep == s then
+				hasActiveBatch = true
 			end
 
-			-- Tentukan step untuk fase siklus elephant / leveling_p1:
-			local cycleStep = nil
-			if anyNeedWeight then
-				local cyclePhase = ctx.state.growthCyclePhase
-				if not cyclePhase then
-					-- Initial phase: kalau semua pet target sudah level 50 -> langsung elephant, kalau ada yg belum -> leveling_p1
-					if anyReadyLevel50 and not anyNeedLevel50 then
-						cyclePhase = "elephant"
-					else
-						cyclePhase = "leveling_p1"
-					end
-				end
-
-				if cyclePhase == "leveling_p1" then
-					-- Tetap di leveling_p1 sampai SEMUA pet target (yg butuh weight) sudah level >= 50
-					if not anyNeedLevel50 then
-						-- Selesai semua leveling_p1! Switch ke elephant
-						cyclePhase = "elephant"
-					end
-				elseif cyclePhase == "elephant" then
-					-- Tetap di elephant sampai TIDAK ADA LAGI pet level >= 50 (semua sudah ter-reset)
-					if not anyReadyLevel50 then
-						-- Semua pet level 50 sudah di-boost & ter-reset! Switch balik ke leveling_p1
-						cyclePhase = "leveling_p1"
-					end
-				end
-				ctx.state.growthCyclePhase = cyclePhase
-				cycleStep = cyclePhase
+			if hasActiveBatch or stepHasPendingPets(s) then
+				step = s
+				stepIdx = curIdx
+				break
 			else
-				ctx.state.growthCyclePhase = nil
-			end
-
-			for i, s in ipairs(flow) do
-				if s == "leveling_p1" or s == "elephant" then
-					if anyNeedWeight then
-						-- Masih dalam proses weight: pilih step sesuai status kesiapan
-						if s == cycleStep then
-							step, stepIdx = s, i
-							break
-						end
-						-- Jika bukan cycleStep, lewati
-					else
-						-- Weight sudah beres semua! leveling_p1 & elephant dianggap done, lanjut ke step berikutnya (mutation/leveling)
-					end
-				else
-					-- Step lain (mutation, leveling, leveling_p2, dll)
-					local ty = typesFor(s)
-					local allDone = true
-					for _, v in pairs(inv) do
-						if matchesType(ty, v.PetType, v.PetData) and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
-							allDone = false
-							break
-						end
-					end
-					if not allDone then
-						step, stepIdx = s, i
-						break
-					end
+				-- Step ini sudah tidak ada lagi pet yang memenuhi syarat -> lanjut ke step berikutnya!
+				curIdx = curIdx + 1
+				if curIdx > #flow then
+					curIdx = 1
 				end
-			end
-		else
-			-- Flow standar tanpa kombinasi leveling_p1 + elephant
-			for i, s in ipairs(flow) do
-				local ty = typesFor(s)
-				local allDone = true
-				for _, v in pairs(inv) do
-					if matchesType(ty, v.PetType, v.PetData) and v.PetData and not isFav(v.PetData) and not stepDone(s, v.PetData) then
-						allDone = false; break
-					end
-				end
-				if not allDone then step, stepIdx = s, i; break end
+				searchCount = searchCount + 1
 			end
 		end
 
 		if not step then
 			ctx.state.growthStep = "SELESAI"
 			ctx.state.growthStatus = "Growth: semua step selesai ✓"
-			if ctx.state.growthClearKey ~= "__done" then ctx.state.growthClearKey = "__done"; if ctx.clearGarden then ctx.clearGarden("Growth") end end
+			if ctx.state.growthClearKey ~= "__done" then
+				ctx.state.growthClearKey = "__done"
+				if ctx.clearGarden then ctx.clearGarden("Growth") end
+			end
 			return
 		end
+
+		ctx.state.growthStepIdx = stepIdx
+		ctx.state.growthBatchStep = step
 
 		-- target pet buat step aktif ini (per-method / fallback global)
 		local types = typesFor(step)
 
-		-- team / max / kriteria "masih perlu diproses" untuk step ini (leveling: sub-phase)
+		-- team / max / kriteria "masih perlu diproses" untuk step ini
 		local team, maxPets, needsWork
-		local levPhase2 = false  -- true kalau step leveling lagi di Phase 2 (buat catat duration)
+		local levPhase2 = false
 		local stepLabel = ("Step %d: %s"):format(stepIdx, step)
+
 		if step == "elephant" then
-			local p1Target = CFG.growthLevP1Target or 50
 			team, maxPets = CFG.growthElephantTeam or {}, CFG.growthElephantMax or 2
-			-- Elephant HANYA boleh ambil pet yang belum target weight DAN level >= p1Target (level 50)
 			needsWork = function(pd)
-				return not stepDone("elephant", pd) and (pd.Level or 0) >= p1Target
+				return not stepDone("elephant", pd) and petMeetsEquip("elephant", pd)
 			end
 		elseif step == "mutation" then
 			team, maxPets = CFG.growthMutationTeam or {}, CFG.growthMutationMax or 2
-			needsWork = function(pd) return not stepDone("mutation", pd) end
-		elseif step == "leveling_p1" then
-			local p1Target = CFG.growthLevP1Target or 50
-			team, maxPets = CFG.growthLevP1Team or {}, CFG.growthLevP1Max or 3
-			stepLabel = stepLabel .. " (Phase 1 - forced)"
 			needsWork = function(pd)
-				return (pd.Level or 0) < p1Target and not stepDone("elephant", pd)
+				return not stepDone("mutation", pd) and petMeetsEquip("mutation", pd)
+			end
+		elseif step == "leveling_p1" then
+			team, maxPets = CFG.growthLevP1Team or {}, CFG.growthLevP1Max or 3
+			stepLabel = stepLabel .. " (Phase 1)"
+			needsWork = function(pd)
+				return not stepDone("leveling_p1", pd) and petMeetsEquip("leveling_p1", pd)
 			end
 		elseif step == "leveling_p2" then
 			team, maxPets = CFG.growthLevP2Team or {}, CFG.growthLevP2Max or 1
-			stepLabel = stepLabel .. " (Phase 2 - forced)"
-			needsWork = function(pd) return (pd.Level or 0) < (CFG.growthLevP2Target or 500) end
+			stepLabel = stepLabel .. " (Phase 2)"
+			needsWork = function(pd)
+				return not stepDone("leveling_p2", pd) and petMeetsEquip("leveling_p2", pd)
+			end
 			levPhase2 = true
 		else -- step == "leveling" (auto phase)
-			local p1t = CFG.growthLevP1Target or 50
+			local p1t = CFG.growthLevP1UnequipAge or CFG.growthLevP1Target or 50
 			local phase1 = false
 			for _, v in pairs(inv) do
-				if matchesType(types, v.PetType, v.PetData) and not isFav(v.PetData) and not stepDone("leveling", v.PetData) and ((v.PetData or {}).Level or 0) < p1t then
+				if matchesType(types, v.PetType, v.PetData) and not isFav(v.PetData) and not stepDone("leveling_p1", v.PetData) and ((v.PetData or {}).Level or 0) < p1t then
 					phase1 = true
 					break
 				end
 			end
 			if phase1 then
 				team, maxPets = CFG.growthLevP1Team or {}, CFG.growthLevP1Max or 3
-				stepLabel = stepLabel .. " (Phase 1 - auto)"
-				needsWork = function(pd) return (pd.Level or 0) < p1t end
+				stepLabel = stepLabel .. " (Phase 1)"
+				needsWork = function(pd) return not stepDone("leveling_p1", pd) and petMeetsEquip("leveling_p1", pd) end
 			else
 				team, maxPets = CFG.growthLevP2Team or {}, CFG.growthLevP2Max or 1
-				stepLabel = stepLabel .. " (Phase 2 - auto)"
-				needsWork = function(pd) return not stepDone("leveling", pd) end
+				stepLabel = stepLabel .. " (Phase 2)"
+				needsWork = function(pd) return not stepDone("leveling_p2", pd) and petMeetsEquip("leveling_p2", pd) end
 				levPhase2 = true
 			end
 		end
@@ -5120,6 +5071,9 @@ return function(ctx)
 					cleansePet(uuid)
 				end
 				local isDone = stepDone(step, pd)
+				if step == "elephant" and (pd.Level or 0) < (CFG.growthElephantEquipAge or 50) then
+					isDone = true
+				end
 				local nextReady = petMeetsNextStep(step, pd)
 				if not (isDone or nextReady) then
 					allSatisfied = false
@@ -5241,6 +5195,9 @@ return function(ctx)
 		ctx.state.elephantWebhookPost = true -- Growth: POST pesan baru tiap pet selesai (bukan edit)
 		ctx.state.growthLastStepName = nil -- reset biar step pertama kirim webhook "enabled"
 		ctx.state.growthCyclePhase = nil
+		ctx.state.growthStepIdx = 1
+		ctx.state.growthBatch = {}
+		ctx.state.growthBatchStep = nil
 		task.spawn(growthLoop)
 	end
 	function ctx.stopGrowth()
@@ -5248,6 +5205,9 @@ return function(ctx)
 		ctx.state.elephantCfgOverride = nil -- balikin webhook elephant ke config standalone
 		ctx.state.elephantWebhookPost = nil -- balikin webhook elephant ke mode edit (standalone)
 		ctx.state.growthCyclePhase = nil
+		ctx.state.growthStepIdx = nil
+		ctx.state.growthBatch = {}
+		ctx.state.growthBatchStep = nil
 		if ctx.clearGarden then ctx.clearGarden("Growth") end
 	end
 end]=],

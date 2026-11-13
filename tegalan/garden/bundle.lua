@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T10:27:33.671Z
+-- 44 modul, di-generate 2026-11-13T12:22:06.848Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -10603,13 +10603,14 @@ return function(ctx)
 
 	local cdMap = ctx.state.cdMap or {}
 	ctx.state.cdMap = cdMap
-	local READY_TH = 0
+	local READY_TH = 0.1
 
-	local GetPetCooldown = RS:WaitForChild("GameEvents"):WaitForChild("GetPetCooldown")
+	local GameEvents = RS:WaitForChild("GameEvents")
+	local GetPetCooldown = GameEvents:WaitForChild("GetPetCooldown")
+	local PetCooldownsUpdated = GameEvents:FindFirstChild("PetCooldownsUpdated")
 
-	local function readMainCd(uuid)
-		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
-		if not ok or type(cd) ~= "table" then return nil end
+	local function computeMainCd(cd)
+		if type(cd) ~= "table" then return nil end
 		local data, mainCd = {}, 0
 		for _, e in ipairs(cd) do
 			local t = tonumber(e.Time) or 0
@@ -10618,8 +10619,38 @@ return function(ctx)
 				if t > mainCd then mainCd = t end
 			end
 		end
-		cdMap[uuid] = { data = data }
-		return mainCd
+		return mainCd, data
+	end
+
+	-- cdLive: cd real-time per pet (di-update oleh server push atau seed)
+	local cdLive = ctx.state.pnpCdLive or {}
+	ctx.state.pnpCdLive = cdLive
+	if PetCooldownsUpdated then
+		local g = (getgenv and getgenv()) or _G
+		if g.__pnpV1CdConn then pcall(function() g.__pnpV1CdConn:Disconnect() end) end
+		g.__pnpV1CdConn = PetCooldownsUpdated.OnClientEvent:Connect(function(uuid, cdTable)
+			if type(uuid) ~= "string" then return end
+			local m, data = computeMainCd(cdTable)
+			if m ~= nil then
+				cdLive[uuid] = m
+				cdMap[uuid] = { data = data }
+			end
+		end)
+	end
+
+	local function seedCd(uuid)
+		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
+		local m, data = computeMainCd(ok and cd or nil)
+		if m ~= nil then
+			cdLive[uuid] = m
+			cdMap[uuid] = { data = data }
+		end
+		return m
+	end
+
+	local function readMainCd(uuid)
+		if cdLive[uuid] ~= nil then return cdLive[uuid] end
+		return seedCd(uuid)
 	end
 
 	local function targetPets()
@@ -10779,10 +10810,15 @@ return function(ctx)
 		return hrp and hrp.Position or nil
 	end
 
-	----------------------------------------------------------------- loop (polling, paralel per-pet)
+	----------------------------------------------------------------- loop (paralel per-pet)
 	local petThreads = {}
+	local lastPlace = {}
+
+	-- KITA TIDAK PAKAI GLOBAL LOCK, TETAP PARALLEL
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
+		if cdLive[uuid] == nil then seedCd(uuid) end
+
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
@@ -10790,17 +10826,58 @@ return function(ctx)
 			end
 			if not stillTarget then break end
 
-			local mainCd = readMainCd(uuid)
+			local cd = cdLive[uuid]
+			if cd == nil then cd = seedCd(uuid) end
 			local pos = placePos()
-			if pos and mainCd ~= nil and mainCd <= READY_TH then
-				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
+
+			-- Threshold cooldown 0.1 (Biar aman dikit)
+			if pos and cd ~= nil and cd <= 0.1 and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+
+				-- Micro-Delay (10ms - 30ms) agar request tidak menumpuk di milidetik yang sama
+				local userDelay = tonumber(CFG.pickupDelay)
+				if userDelay and userDelay > 0 then
+					task.wait(userDelay)
+				else
+					task.wait(math.random(10, 30) / 1000)
+				end
+
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+
+				-- 1. UNEQUIP
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
+
+				-- 2. Jeda sepersekian detik (Cukup 50ms)
+				local eqDelay = tonumber(CFG.equipDelay)
+				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
+				task.wait(eqDelay)
+
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+
+				-- 3. EQUIP (Tiru format Cobalt + Random Offset Fisik)
+				local offsetX = math.random(-5, 5)
+				local offsetZ = math.random(-5, 5)
+				local finalPos = pos + Vector3.new(offsetX, 0, offsetZ)
+
+				-- Format CFrame persis seperti Cobalt (dengan rotasi 1,0,0...)
+				local cf = CFrame.new(
+					finalPos.X, finalPos.Y, finalPos.Z, 
+					1, 0, 0, 
+					0, 1, 0, 
+					0, 0, 1
+				)
+
+				pcall(function() PetsService:FireServer("EquipPet", uuid, cf) end)
+
+				-- 4. Jeda singkat setelah equip (50ms) untuk memicu skill
+				task.wait(0.05)
+
+				lastPlace[uuid] = os.clock()
 			end
-			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
+
+			-- Loop cek cooldown (super cepat)
+			local scanDelay = tonumber(CFG.pnpScanInterval)
+			if not scanDelay or scanDelay <= 0 then scanDelay = 0.02 end
+			task.wait(scanDelay)
 		end
 		petThreads[uuid] = nil
 	end
@@ -10922,17 +10999,57 @@ return function(ctx)
 			if not stillTarget then break end
 
 			local cd = cdLive[uuid]
+			if cd == nil then cd = seedCd(uuid) end
 			local pos = placePos()
-			if pos and cd ~= nil and cd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
-				if (CFG.pnpV2PickupDelay or 0) > 0 then task.wait(CFG.pnpV2PickupDelay) end
+
+			-- Threshold cooldown 0.1 (Biar aman dikit)
+			if pos and cd ~= nil and cd <= 0.1 and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+
+				-- Micro-Delay (10ms - 30ms) agar request tidak menumpuk di milidetik yang sama
+				local userDelay = tonumber(CFG.pnpV2PickupDelay)
+				if userDelay and userDelay > 0 then
+					task.wait(userDelay)
+				else
+					task.wait(math.random(10, 30) / 1000)
+				end
+
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
+
+				-- 1. UNEQUIP
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				task.wait(math.max(0.01, CFG.pnpV2EquipDelay or 0.03))
+
+				-- 2. Jeda sepersekian detik (Cukup 50ms)
+				local eqDelay = tonumber(CFG.pnpV2EquipDelay)
+				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
+				task.wait(eqDelay)
+
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
-				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+
+				-- 3. EQUIP (Tiru format Cobalt + Random Offset Fisik)
+				local offsetX = math.random(-5, 5)
+				local offsetZ = math.random(-5, 5)
+				local finalPos = pos + Vector3.new(offsetX, 0, offsetZ)
+
+				-- Format CFrame persis seperti Cobalt (dengan rotasi 1,0,0...)
+				local cf = CFrame.new(
+					finalPos.X, finalPos.Y, finalPos.Z, 
+					1, 0, 0, 
+					0, 1, 0, 
+					0, 0, 1
+				)
+
+				pcall(function() PetsService:FireServer("EquipPet", uuid, cf) end)
+
+				-- 4. Jeda singkat setelah equip (50ms) untuk memicu skill
+				task.wait(0.05)
+
 				lastPlace[uuid] = os.clock()
 			end
-			task.wait(math.max(0.02, tonumber(CFG.pnpV2ScanInterval) or 0.05))
+
+			-- Loop cek cooldown (super cepat)
+			local scanDelay = tonumber(CFG.pnpV2ScanInterval)
+			if not scanDelay or scanDelay <= 0 then scanDelay = 0.02 end
+			task.wait(scanDelay)
 		end
 		petThreads[uuid] = nil
 	end

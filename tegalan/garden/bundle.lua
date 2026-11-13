@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T12:22:06.848Z
+-- 44 modul, di-generate 2026-11-13T12:53:08.340Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -10810,11 +10810,27 @@ return function(ctx)
 		return hrp and hrp.Position or nil
 	end
 
-	----------------------------------------------------------------- loop (paralel per-pet)
+	----------------------------------------------------------------- loop (TRUE PARALLEL + ANTI COLLISION)
 	local petThreads = {}
 	local lastPlace = {}
 
-	-- KITA TIDAK PAKAI GLOBAL LOCK, TETAP PARALLEL
+	-- Fungsi untuk memberi posisi unik per pet (mencegah tumpang tindih)
+	local function getUniquePos(basePos, uuid)
+		-- Ambil angka dari UUID agar posisinya konsisten untuk pet tersebut
+		local hash = 0
+		local sUuid = tostring(uuid)
+		for i = 1, #sUuid do hash = (hash + string.byte(sUuid, i)) % 360 end
+
+		-- Sebar melingkar dengan radius 3-8 studs
+		local radius = 3 + (hash % 6)
+		local angle = math.rad(hash)
+
+		local offsetX = math.cos(angle) * radius
+		local offsetZ = math.sin(angle) * radius
+
+		return basePos + Vector3.new(offsetX, 0, offsetZ)
+	end
+
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
 		if cdLive[uuid] == nil then seedCd(uuid) end
@@ -10828,37 +10844,30 @@ return function(ctx)
 
 			local cd = cdLive[uuid]
 			if cd == nil then cd = seedCd(uuid) end
-			local pos = placePos()
+			local basePos = placePos()
 
-			-- Threshold cooldown 0.1 (Biar aman dikit)
-			if pos and cd ~= nil and cd <= 0.1 and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+			-- Cek cooldown (threshold 0.05) & pastikan tidak spam PnP di detik yang sama
+			if basePos and cd ~= nil and cd <= 0.05 and (os.clock() - (lastPlace[uuid] or 0)) > 0.2 then
 
-				-- Micro-Delay (10ms - 30ms) agar request tidak menumpuk di milidetik yang sama
-				local userDelay = tonumber(CFG.pickupDelay)
-				if userDelay and userDelay > 0 then
-					task.wait(userDelay)
-				else
-					task.wait(math.random(10, 30) / 1000)
-				end
+				-- 1. FORMAT UUID (Wajib pakai kurawal seperti Cobalt)
+				local formattedUuid = tostring(uuid)
+				if formattedUuid:sub(1, 1) ~= "{" then formattedUuid = "{" .. formattedUuid end
+				if formattedUuid:sub(-1) ~= "}" then formattedUuid = formattedUuid .. "}" end
 
-				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+				-- 2. UNEQUIP
+				pcall(function() PetsService:FireServer("UnequipPet", formattedUuid) end)
 
-				-- 1. UNEQUIP
-				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-
-				-- 2. Jeda sepersekian detik (Cukup 50ms)
+				-- 3. JEDA 0.05s (Beri nafas server sebelum di-Equip)
 				local eqDelay = tonumber(CFG.equipDelay)
 				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
 				task.wait(eqDelay)
 
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
 
-				-- 3. EQUIP (Tiru format Cobalt + Random Offset Fisik)
-				local offsetX = math.random(-5, 5)
-				local offsetZ = math.random(-5, 5)
-				local finalPos = pos + Vector3.new(offsetX, 0, offsetZ)
+				-- 4. EQUIP (Posisi unik + Format CFrame Cobalt)
+				local finalPos = getUniquePos(basePos, uuid)
 
-				-- Format CFrame persis seperti Cobalt (dengan rotasi 1,0,0...)
+				-- Format CFrame persis Cobalt (1,0,0, 0,1,0, 0,0,1)
 				local cf = CFrame.new(
 					finalPos.X, finalPos.Y, finalPos.Z, 
 					1, 0, 0, 
@@ -10866,18 +10875,16 @@ return function(ctx)
 					0, 0, 1
 				)
 
-				pcall(function() PetsService:FireServer("EquipPet", uuid, cf) end)
+				pcall(function() PetsService:FireServer("EquipPet", formattedUuid, cf) end)
 
-				-- 4. Jeda singkat setelah equip (50ms) untuk memicu skill
-				task.wait(0.05)
+				-- 5. JEDA 0.1s setelah Equip agar skill memicu sebelum dicek lagi
+				task.wait(0.1)
 
 				lastPlace[uuid] = os.clock()
 			end
 
-			-- Loop cek cooldown (super cepat)
-			local scanDelay = tonumber(CFG.pnpScanInterval)
-			if not scanDelay or scanDelay <= 0 then scanDelay = 0.02 end
-			task.wait(scanDelay)
+			-- Cek cooldown setiap 1 frame (16ms)
+			task.wait()
 		end
 		petThreads[uuid] = nil
 	end
@@ -10886,17 +10893,21 @@ return function(ctx)
 		ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1
 		local myId = ctx.state.pnpV1Id
 		ctx.elevate()
+
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
 			local pets = targetPets()
 			if #pets == 0 then
 				setStatus("PNP V1: tidak ada pet target (equip pet dulu)")
 			else
+				-- Spawn thread untuk SETIAP pet secara independen
 				for _, p in ipairs(pets) do
-					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
+					if not petThreads[p.uuid] then 
+						task.spawn(runPetThread, p.uuid, myId) 
+					end
 				end
-				setStatus(("PNP V1 (polling): %d pet"):format(#pets))
+				setStatus(("PNP V1 (Parallel): %d pet"):format(#pets))
 			end
-			task.wait(1)
+			task.wait(0.5) -- Cek daftar target tiap 0.5s
 		end
 	end
 
@@ -10985,12 +10996,31 @@ return function(ctx)
 		return hrp and hrp.Position or nil
 	end
 
-	----------------------------------------------------------------- loop (event-driven, paralel per-pet)
+	----------------------------------------------------------------- loop (TRUE PARALLEL + ANTI COLLISION)
 	local petThreads = {}
 	local lastPlace = {}
+
+	-- Fungsi untuk memberi posisi unik per pet (mencegah tumpang tindih)
+	local function getUniquePos(basePos, uuid)
+		-- Ambil angka dari UUID agar posisinya konsisten untuk pet tersebut
+		local hash = 0
+		local sUuid = tostring(uuid)
+		for i = 1, #sUuid do hash = (hash + string.byte(sUuid, i)) % 360 end
+
+		-- Sebar melingkar dengan radius 3-8 studs
+		local radius = 3 + (hash % 6)
+		local angle = math.rad(hash)
+
+		local offsetX = math.cos(angle) * radius
+		local offsetZ = math.sin(angle) * radius
+
+		return basePos + Vector3.new(offsetX, 0, offsetZ)
+	end
+
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
 		if cdLive[uuid] == nil then seedCd(uuid) end
+
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
 			local stillTarget = false
 			for _, p in ipairs(targetPets()) do
@@ -11000,37 +11030,30 @@ return function(ctx)
 
 			local cd = cdLive[uuid]
 			if cd == nil then cd = seedCd(uuid) end
-			local pos = placePos()
+			local basePos = placePos()
 
-			-- Threshold cooldown 0.1 (Biar aman dikit)
-			if pos and cd ~= nil and cd <= 0.1 and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
+			-- Cek cooldown (threshold 0.05) & pastikan tidak spam PnP di detik yang sama
+			if basePos and cd ~= nil and cd <= 0.05 and (os.clock() - (lastPlace[uuid] or 0)) > 0.2 then
 
-				-- Micro-Delay (10ms - 30ms) agar request tidak menumpuk di milidetik yang sama
-				local userDelay = tonumber(CFG.pnpV2PickupDelay)
-				if userDelay and userDelay > 0 then
-					task.wait(userDelay)
-				else
-					task.wait(math.random(10, 30) / 1000)
-				end
+				-- 1. FORMAT UUID (Wajib pakai kurawal seperti Cobalt)
+				local formattedUuid = tostring(uuid)
+				if formattedUuid:sub(1, 1) ~= "{" then formattedUuid = "{" .. formattedUuid end
+				if formattedUuid:sub(-1) ~= "}" then formattedUuid = formattedUuid .. "}" end
 
-				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
+				-- 2. UNEQUIP
+				pcall(function() PetsService:FireServer("UnequipPet", formattedUuid) end)
 
-				-- 1. UNEQUIP
-				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-
-				-- 2. Jeda sepersekian detik (Cukup 50ms)
+				-- 3. JEDA 0.05s (Beri nafas server sebelum di-Equip)
 				local eqDelay = tonumber(CFG.pnpV2EquipDelay)
 				if not eqDelay or eqDelay == 1e-20 or eqDelay == 0 then eqDelay = 0.05 end
 				task.wait(eqDelay)
 
 				if not (CFG.pnpV2Enabled and ctx.state.pnpV2Id == myId) then break end
 
-				-- 3. EQUIP (Tiru format Cobalt + Random Offset Fisik)
-				local offsetX = math.random(-5, 5)
-				local offsetZ = math.random(-5, 5)
-				local finalPos = pos + Vector3.new(offsetX, 0, offsetZ)
+				-- 4. EQUIP (Posisi unik + Format CFrame Cobalt)
+				local finalPos = getUniquePos(basePos, uuid)
 
-				-- Format CFrame persis seperti Cobalt (dengan rotasi 1,0,0...)
+				-- Format CFrame persis Cobalt (1,0,0, 0,1,0, 0,0,1)
 				local cf = CFrame.new(
 					finalPos.X, finalPos.Y, finalPos.Z, 
 					1, 0, 0, 
@@ -11038,18 +11061,16 @@ return function(ctx)
 					0, 0, 1
 				)
 
-				pcall(function() PetsService:FireServer("EquipPet", uuid, cf) end)
+				pcall(function() PetsService:FireServer("EquipPet", formattedUuid, cf) end)
 
-				-- 4. Jeda singkat setelah equip (50ms) untuk memicu skill
-				task.wait(0.05)
+				-- 5. JEDA 0.1s setelah Equip agar skill memicu sebelum dicek lagi
+				task.wait(0.1)
 
 				lastPlace[uuid] = os.clock()
 			end
 
-			-- Loop cek cooldown (super cepat)
-			local scanDelay = tonumber(CFG.pnpV2ScanInterval)
-			if not scanDelay or scanDelay <= 0 then scanDelay = 0.02 end
-			task.wait(scanDelay)
+			-- Cek cooldown setiap 1 frame (16ms)
+			task.wait()
 		end
 		petThreads[uuid] = nil
 	end
@@ -11058,17 +11079,21 @@ return function(ctx)
 		ctx.state.pnpV2Id = (ctx.state.pnpV2Id or 0) + 1
 		local myId = ctx.state.pnpV2Id
 		ctx.elevate()
+
 		while CFG.pnpV2Enabled and ctx.alive() and ctx.state.pnpV2Id == myId do
 			local pets = targetPets()
 			if #pets == 0 then
 				setStatus("PNP V2: tidak ada pet target (equip pet dulu)")
 			else
+				-- Spawn thread untuk SETIAP pet secara independen
 				for _, p in ipairs(pets) do
-					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
+					if not petThreads[p.uuid] then 
+						task.spawn(runPetThread, p.uuid, myId) 
+					end
 				end
-				setStatus(("PNP V2 (event-driven): %d pet"):format(#pets))
+				setStatus(("PNP V2 (Parallel): %d pet"):format(#pets))
 			end
-			task.wait(1)
+			task.wait(0.5) -- Cek daftar target tiap 0.5s
 		end
 	end
 

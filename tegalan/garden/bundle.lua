@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 45 modul, di-generate 2026-11-14T04:00:47.128Z
+-- 45 modul, di-generate 2026-11-14T04:13:11.518Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua Ã¢â‚¬â€ init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -11303,13 +11303,13 @@ return function(ctx)
 			return false
 		end
 
-		-- Guard: cooldown harus ready (<= 0)
-		if cd == nil or cd > 0 then
+		-- FIX: cd == nil (API belum respon) TETAP BOLEH CAST
+		if cd ~= nil and cd > 0 then
 			dbg("Skip " .. uuid .. " (cd=" .. tostring(cd) .. ")")
 			return false
 		end
 
-		-- Guard: debounce global (juga menangkap equip dari Flow via pnpLastPlace)
+		-- Guard: debounce global
 		local debounce = tonumber(CFG.pnpDebounce) or DEFAULT_DEBOUNCE
 		local timeSincePlace = now - (lastPlace[uuid] or 0)
 		if timeSincePlace < debounce then
@@ -11318,22 +11318,21 @@ return function(ctx)
 			return false
 		end
 
-		-- Guard: suspect window (pet yang skillnya gagal 3x berturut-turut)
+		-- Guard: suspect window
 		if st.suspectUntil and now < st.suspectUntil then
 			dbg("Skip " .. uuid .. " (suspect until " .. string.format("%.1f", st.suspectUntil - now) .. "s)")
 			stats.totalSkipped = stats.totalSkipped + 1
 			return false
 		end
 
-		-- FIX #1: Guard retry diperlonggar ke MAX_RETRY_PER_WINDOW = 30 per 10s
+		-- Guard: retry limit
 		if st.retryWindowStart and (now - st.retryWindowStart) < RETRY_WINDOW then
 			if (st.retryCount or 0) >= MAX_RETRY_PER_WINDOW then
-				dbg("Skip " .. uuid .. " (retry limit " .. MAX_RETRY_PER_WINDOW .. "/" .. RETRY_WINDOW .. "s)")
+				dbg("Skip " .. uuid .. " (retry limit)")
 				stats.totalSkipped = stats.totalSkipped + 1
 				return false
 			end
 		else
-			-- Reset jendela retry
 			st.retryCount       = 0
 			st.retryWindowStart = now
 		end
@@ -11343,40 +11342,35 @@ return function(ctx)
 			return false
 		end
 
-		-- ---- EKSEKUSI CAST ----
-		dbg("Cast " .. uuid .. " (cd=" .. tostring(cd) .. ", debounce ok=" .. string.format("%.3f", timeSincePlace) .. "s)")
-
-		-- Jeda pickupDelay sebelum unequip (agar skill sempat register di server)
-		local pickupDelay = tonumber(CFG.pickupDelay) or DEFAULT_PICKUP_DELAY
-		if pickupDelay > 0 then task.wait(pickupDelay) end
-
-		-- Cek lagi setelah wait
-		if not (CFG.pnpV3Enabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return false end
-
-		-- Simpan cd lama untuk deteksi skill gagal
-		local cdBeforeCast = cdLive[uuid]
-
-		pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-
-		local equipDelay = tonumber(CFG.equipDelay) or DEFAULT_EQUIP_DELAY
-		task.wait(math.max(0.01, equipDelay))
-
-		if not (CFG.pnpV3Enabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return false end
-
-		pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
-
-		-- Update state setelah cast berhasil
-		local castTime    = os.clock()
-		lastPlace[uuid]   = castTime
-		st.lastAction     = castTime
+		-- ---- MULAI CAST (KUNCI STATE DULU AGAR TIDAK DOUBLE CAST) ----
+		lastPlace[uuid]   = now
+		st.lastAction     = now
 		st.status         = "casting"
 		st.retryCount     = (st.retryCount or 0) + 1
 		stats.totalCasts  = stats.totalCasts + 1
-
-		-- Deteksi skill gagal: simpan data untuk dicek di siklus berikutnya
-		st._cdBeforeCast  = cdBeforeCast
-		st._castAt        = castTime
+		
+		st._cdBeforeCast  = cdLive[uuid]
+		st._castAt        = now
 		st._scanTimeout   = tonumber(CFG.pnpScanTimeout) or DEFAULT_SCAN_TIMEOUT
+
+		dbg("Cast START " .. uuid)
+
+		-- EKSEKUSI DI BACKGROUND (TASK.SPAWN) AGAR LOOP UTAMA TIDAK TERHENTI
+		task.spawn(function()
+			local pickupDelay = tonumber(CFG.pickupDelay) or DEFAULT_PICKUP_DELAY
+			if pickupDelay > 0 then task.wait(pickupDelay) end
+			if not (CFG.pnpV3Enabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return end
+
+			pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+
+			local equipDelay = tonumber(CFG.equipDelay) or DEFAULT_EQUIP_DELAY
+			task.wait(math.max(0.01, equipDelay))
+			
+			if not (CFG.pnpV3Enabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return end
+
+			pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+			dbg("Cast DONE " .. uuid)
+		end)
 
 		return true
 	end

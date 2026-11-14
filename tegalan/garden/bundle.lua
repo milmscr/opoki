@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T17:07:25.124Z
+-- 44 modul, di-generate 2026-11-13T23:35:40.001Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -10610,16 +10610,17 @@ return function(ctx)
 	local function readMainCd(uuid)
 		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
 		if not ok or type(cd) ~= "table" then return nil end
-		local data, mainCd = {}, 0
+		local data, minCd = {}, nil
 		for _, e in ipairs(cd) do
 			local t = tonumber(e.Time) or 0
 			data[#data + 1] = { Passive = e.Passive, Time = t }
 			if not tostring(e.Passive or ""):find("Mutation") then
-				if t > mainCd then mainCd = t end
+				-- Jika pet punya 2+ skill, ambil cooldown terkecil agar begitu salah satu ready (<= 0) langsung trigger PNP
+				if minCd == nil or t < minCd then minCd = t end
 			end
 		end
 		cdMap[uuid] = { data = data }
-		return mainCd
+		return minCd
 	end
 
 	local function targetPets()
@@ -10693,6 +10694,7 @@ return function(ctx)
 
 	----------------------------------------------------------------- loop (polling, paralel per-pet)
 	local petThreads = {}
+	local lastPlace = {}
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
@@ -10704,13 +10706,14 @@ return function(ctx)
 
 			local mainCd = readMainCd(uuid)
 			local pos = placePos()
-			if pos and mainCd ~= nil and mainCd <= READY_TH then
+			if pos and mainCd ~= nil and mainCd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
 				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
 				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
 				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
 				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
 				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+				lastPlace[uuid] = os.clock()
 			end
 			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
 		end
@@ -10764,15 +10767,16 @@ return function(ctx)
 
 	local function computeMainCd(cd)
 		if type(cd) ~= "table" then return nil end
-		local data, mainCd = {}, 0
+		local data, minCd = {}, nil
 		for _, e in ipairs(cd) do
 			local t = tonumber(e.Time) or 0
 			data[#data + 1] = { Passive = e.Passive, Time = t }
 			if not tostring(e.Passive or ""):find("Mutation") then
-				if t > mainCd then mainCd = t end
+				-- Jika pet punya 2+ skill, ambil cooldown terkecil agar begitu salah satu ready (<= 0) langsung trigger PNP
+				if minCd == nil or t < minCd then minCd = t end
 			end
 		end
-		return mainCd, data
+		return minCd, data
 	end
 
 	-- cdLive: cd real-time per pet, di-update oleh event PetCooldownsUpdated (server push).

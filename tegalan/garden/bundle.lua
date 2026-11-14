@@ -1,9 +1,9 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-13T23:35:40.001Z
+-- 45 modul, di-generate 2026-11-14T01:19:23.861Z
 return {
 	["app.lua"] = [=[
---[[ app.lua — init akhir garden: default tab Inventory + auto-resume automation. ]]
+--[[ app.lua â€” init akhir garden: default tab Inventory + auto-resume automation. ]]
 return function(ctx)
 	local CFG = ctx.CFG
 	local pages = ctx.ui.pages
@@ -28,13 +28,13 @@ return function(ctx)
 		local title = Instance.new("TextLabel")
 		title.BackgroundTransparency = 1; title.Size = UDim2.new(1, -14, 0, 18)
 		title.Font = Enum.Font.FredokaOne; title.TextSize = 16; title.TextXAlignment = Enum.TextXAlignment.Left
-		title.RichText = true; title.Text = '✦ CeszParadiseHub <font color="#ff3287">Garden</font>'
+		title.RichText = true; title.Text = 'âœ¦ CeszParadiseHub <font color="#ff3287">Garden</font>'
 		title.TextColor3 = C.txt; title.Parent = f
 		local body = Instance.new("TextLabel")
 		body.BackgroundTransparency = 1; body.Size = UDim2.new(1, -14, 0, 16); body.Position = UDim2.fromOffset(0, 24)
 		body.Font = Enum.Font.Ubuntu; body.TextSize = 13
 		local initFps = math.clamp(math.round(workspace:GetRealPhysicsFPS() or 60), 1, 999)
-		body.Text = ("Loaded successfully ✦  |  %d FPS"):format(initFps); body.TextColor3 = C.accSoft; body.Parent = f
+		body.Text = ("Loaded successfully âœ¦  |  %d FPS"):format(initFps); body.TextColor3 = C.accSoft; body.Parent = f
 		local TS = game:GetService("TweenService")
 		TS:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(1, -20, 1, -20) }):Play()
 		task.delay(3, function()
@@ -88,7 +88,7 @@ return function(ctx)
 		local function reconnect()
 			if reconnecting or CFG.autoReconnect == false then return end -- cek toggle real-time
 			reconnecting = true
-			ctx.log("Ke-DC/kick terdeteksi — auto reconnect...")
+			ctx.log("Ke-DC/kick terdeteksi â€” auto reconnect...")
 			local q = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
 			if q then pcall(function() q(RECON) end) end
 			task.wait(3)
@@ -167,6 +167,10 @@ return function(ctx)
 		task.wait(1)
 		ctx.startPnpV2()
 		ctx.log("Auto-resume: PNP V2 ON.")
+	elseif CFG.pnpV3Enabled and ctx.startPnpV3 then
+		task.wait(1)
+		ctx.startPnpV3()
+		ctx.log("Auto-resume: PNP V3 ON.")
 	end
 
 	-- auto-resume kalau sebelumnya aktif
@@ -403,6 +407,12 @@ return function(ctx)
 		pnpV2EquipDelay  = 0.03,
 		pnpV2ScanInterval = 0.05,
 		pnpV2Enabled     = false,
+		-- PnP V3 (agresif + state machine tunggal, config SHARED dengan V1 untuk pnpUuids, pickupDelay, equipDelay, pnpScanInterval)
+		pnpDebounce      = 0.35,  -- minimum jeda antar-PnP per pet (detik)
+		pnpMaxPerCycle   = 2,     -- max pet yang di-cast per siklus loop
+		pnpScanTimeout   = 3,     -- deteksi skill gagal: timeout (detik)
+		pnpDebug         = false, -- true -> log detail setiap cast/skip ke output
+		pnpV3Enabled     = false,
 		espEnabled    = false, -- master / legacy
 		espEggEnabled = false, -- label melayang (ESP) egg di dunia (tanpa box)
 		espPetEnabled = false, -- label melayang (ESP) pet di dunia (tanpa box)
@@ -833,6 +843,12 @@ return function(ctx)
 			CFG.pnpV2EquipDelay  = tonumber(st.pnpV2EquipDelay) or 0.03
 			CFG.pnpV2ScanInterval = tonumber(st.pnpV2ScanInterval) or 0.05
 			CFG.pnpV2Enabled     = st.pnpV2Enabled or false
+			-- PnP V3
+			CFG.pnpDebounce    = tonumber(st.pnpDebounce)    or 0.35
+			CFG.pnpMaxPerCycle = tonumber(st.pnpMaxPerCycle) or 2
+			CFG.pnpScanTimeout = tonumber(st.pnpScanTimeout) or 3
+			CFG.pnpDebug       = st.pnpDebug    or false
+			CFG.pnpV3Enabled   = st.pnpV3Enabled or false
 			CFG.espEnabled    = st.espEnabled or false
 			CFG.espEggEnabled = st.espEggEnabled or false
 			CFG.espPetEnabled = st.espPetEnabled or false
@@ -4782,13 +4798,33 @@ return function(ctx)
 	local function syncGardenTeam(desiredTeam, localEq)
 		local active = ctx.state.growthActivePets or {}
 
+		-- [PnP V3 PATCH] Baca set UUID yang sedang dikelola PnP V3.
+		-- Jika pet ada di pnpUuids DAN dropdown PnP diisi (hasFilter),
+		-- Flow TIDAK boleh unequip pet itu (PnP yang pegang lifecycle-nya).
+		local pnpUuids   = ctx.state.pnpUuids or {}
+		local hasPnpFilter = next(pnpUuids) ~= nil
+
+		-- [PnP V3 PATCH] Helper: set lastPlace agar V3 debounce tidak langsung re-PnP
+		-- pet yang baru saja di-equip oleh Flow.
+		local function markFlowEquip(uuid)
+			if ctx.state.pnpLastPlace then
+				ctx.state.pnpLastPlace[uuid] = os.clock()
+			end
+		end
+
 		-- 1. Lepas pet garden yang BUKAN anggota desiredTeam DAN BUKAN pet target aktif
 		for uuid in pairs(localEq) do
 			if not active[uuid] and not desiredTeam[uuid] then
-				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				localEq[uuid] = nil
-				releaseSlot(uuid)
-				task.wait(0.1)
+				-- [PnP V3 PATCH] Jangan unequip pet yang dikelola PnP V3 (jika filter aktif)
+				if hasPnpFilter and pnpUuids[uuid] then
+					-- PnP V3 yang akan mengelola equip/unequip pet ini; skip
+					-- (jika filter kosong, PnP V3 auto-exclude Flow -> aman juga)
+				else
+					pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+					localEq[uuid] = nil
+					releaseSlot(uuid)
+					task.wait(0.1)
+				end
 			end
 		end
 
@@ -4801,6 +4837,8 @@ return function(ctx)
 				if pos then
 					pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
 					localEq[uuid] = true
+					-- [PnP V3 PATCH] Tandai lastPlace agar V3 debounce tidak langsung re-PnP
+					markFlowEquip(uuid)
 					task.wait(0.15)
 				end
 			end
@@ -10873,6 +10911,596 @@ return function(ctx)
 
 	function ctx.startPnpV2() task.spawn(pnpLoop) end
 	function ctx.stopPnpV2() ctx.state.pnpV2Id = (ctx.state.pnpV2Id or 0) + 1 end
+end
+]=],
+	["modules/pet/automation_pickup_pet_v3.lua"] = [=[
+--[[ automation_pickup_pet_v3.lua — PnP V3 (AGRESIF, BUG-FREE, STATE-MACHINE TUNGGAL)
+     ============================================================================
+     Perbedaan vs V1/V2:
+       V1: Polling InvokeServer per-pet, spawn thread per-pet, max cooldown -> lambat & spammy
+       V2: Event-driven (PetCooldownsUpdated), spawn thread per-pet, min cooldown -> lebih baik
+       V3: Event-driven + state machine TUNGGAL, smart knownActive tracker, priority queue,
+           debounce global, exclusion Flow otomatis, anti-false-positive permanent passives
+
+     Cara pakai:
+       ctx.startPnpV3()           — nyalakin loop utama
+       ctx.stopPnpV3()            — matiin loop (bump pnpV3Id)
+       ctx.inventoryPetOptions()  — buat dropdown UI (sama seperti V1/V2)
+       ctx.getPnpV3Status()       — string status untuk panel UI
+
+     Config yang didukung (di CFG):
+       pnpEnabled        (boolean)  — master switch V3
+       pnpUuids          (table)    — set UUID pet target; kosong = auto-exclude Flow
+       pnpScanInterval   (number)   — interval loop utama, default 0.1s
+       pickupDelay       (number)   — jeda setelah skill ready sebelum unequip, default 0s
+       equipDelay        (number)   — jeda antara unequip -> equip, default 0.05s
+       pnpDebounce       (number)   — minimum jarak antar-PnP per pet, default 0.35s
+       pnpMaxPerCycle    (number)   — max pet yang di-cast per siklus, default 2
+       pnpScanTimeout    (number)   — deteksi skill gagal (cooldown tidak berubah), default 3s
+       pnpDebug          (boolean)  — log debug ke output, default false
+
+     Changelog:
+       v3.0  — Tulis ulang total. State machine tunggal, knownActive tracker, priority queue,
+               debounce global + Flow-aware exclusion, anti-spam dengan suspect window.
+               Patch syncGardenTeam di growth.lua: set ctx.state.pnpLastPlace saat equip.
+]]
+return function(ctx)
+	-- =========================================================================
+	-- 1. DEPENDENCY & KONSTANTA
+	-- =========================================================================
+	local DataService = ctx.deps.DataService
+	local PetsService = ctx.deps.PetsService
+	local CFG         = ctx.CFG
+	local LP          = ctx.LP
+	local RS          = game:GetService("ReplicatedStorage")
+
+	-- Konstanta default — JANGAN pakai magic number di bawah
+	local DEFAULT_SCAN_INTERVAL  = 0.1    -- interval loop utama (detik)
+	local DEFAULT_PICKUP_DELAY   = 0      -- jeda sebelum unequip
+	local DEFAULT_EQUIP_DELAY    = 0.05   -- jeda unequip -> equip
+	local DEFAULT_DEBOUNCE       = 0.35   -- jeda minimum antar-PnP per pet
+	local DEFAULT_MAX_PER_CYCLE  = 2      -- max cast per siklus
+	local DEFAULT_SCAN_TIMEOUT   = 3      -- deteksi skill gagal (detik)
+	local SUSPECT_WINDOW         = 5      -- window skip pet "suspect" (detik)
+	local CLEANUP_INTERVAL       = 30     -- interval cleanup knownActive (detik)
+	local MAX_RETRY_PER_WINDOW   = 3      -- max retry per pet per 10 detik
+	local RETRY_WINDOW           = 10     -- jendela retry (detik)
+
+	-- =========================================================================
+	-- 2. REMOTE EVENTS
+	-- =========================================================================
+	local GameEvents         = RS:WaitForChild("GameEvents")
+	local GetPetCooldown     = GameEvents:WaitForChild("GetPetCooldown")        -- seed awal
+	local PetCooldownsUpdated = GameEvents:WaitForChild("PetCooldownsUpdated") -- push real-time
+
+	-- =========================================================================
+	-- 3. STATE PERSISTENCE (semua masuk ctx.state agar survive lintas respawn)
+	-- =========================================================================
+	-- knownActive: { ["uuid:passiveName"] = true }
+	-- Hanya passive yang PERNAH punya t > 0 yang masuk sini.
+	-- Passive permanen (t=0 selamanya) tidak akan pernah masuk -> tidak trigger PnP.
+	ctx.state.pnpKnownActive = ctx.state.pnpKnownActive or {}
+
+	-- lastPlace: { [uuid] = os.clock() } — di-set tiap equip (PnP maupun Flow)
+	ctx.state.pnpLastPlace   = ctx.state.pnpLastPlace   or {}
+
+	-- petState: { [uuid] = { uuid, lastQuery, lastAction, cooldown, status, suspectUntil, retryCount, retryWindowStart } }
+	ctx.state.pnpPetState    = ctx.state.pnpPetState    or {}
+
+	-- stats untuk diagnostik
+	ctx.state.pnpStats = ctx.state.pnpStats or { totalCasts = 0, totalFailed = 0, totalSkipped = 0 }
+
+	-- cdLive: { [uuid] = minCooldown } — di-update oleh event PetCooldownsUpdated
+	local cdLive = {}
+	ctx.state.pnpV3CdLive = cdLive
+
+	-- pnpV3Id: bump untuk cancel loop lama
+	ctx.state.pnpV3Id = ctx.state.pnpV3Id or 0
+
+	-- Local shorthand
+	local knownActive = ctx.state.pnpKnownActive
+	local lastPlace   = ctx.state.pnpLastPlace
+	local petState    = ctx.state.pnpPetState
+	local stats       = ctx.state.pnpStats
+
+	-- =========================================================================
+	-- 4. HELPER: LOG DEBUG
+	-- =========================================================================
+	local function dbg(msg)
+		if CFG.pnpDebug then
+			print("[PnP V3] " .. tostring(msg))
+		end
+	end
+
+	-- =========================================================================
+	-- 5. SMART COOLDOWN TRACKER
+	--    Prinsip: passive yg t=0 dari awal (permanen) TIDAK dianggap ready.
+	--    Passive yg pernah t>0 masuk knownActive; saat t<=0 DAN knownActive -> trigger.
+	--    Return: minReadyCd (number, bisa <= 0), hasAnyValid (boolean)
+	-- =========================================================================
+	local function computeCdFromTable(uuid, cdTable)
+		if type(cdTable) ~= "table" or #cdTable == 0 then return nil, false end
+
+		local minCd     = nil  -- cooldown terkecil di antara skill valid non-mutation
+		local hasValid  = false
+
+		for _, entry in ipairs(cdTable) do
+			local passiveName = tostring(entry.Passive or "")
+			local t           = tonumber(entry.Time) or 0
+
+			-- Skip passive Mutation (tidak dihitung untuk PnP)
+			if passiveName:find("Mutation") then continue end
+
+			local key = uuid .. ":" .. passiveName
+
+			-- Update knownActive: catat kalau pernah t > 0
+			if t > 0 then
+				knownActive[key] = true
+			end
+
+			-- Skill dianggap VALID hanya jika pernah on cooldown (knownActive)
+			if knownActive[key] then
+				hasValid = true
+				if minCd == nil or t < minCd then
+					minCd = t
+				end
+			end
+		end
+
+		return minCd, hasValid
+	end
+
+	-- Seed cooldown awal lewat InvokeServer (hanya 1x saat thread pet pertama kali masuk)
+	local function seedCooldown(uuid)
+		local ok, cdTable = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
+		if ok and type(cdTable) == "table" then
+			local minCd, hasValid = computeCdFromTable(uuid, cdTable)
+			if minCd ~= nil then cdLive[uuid] = minCd end
+		end
+	end
+
+	-- =========================================================================
+	-- 6. SUBSCRIBE EVENT REAL-TIME (PetCooldownsUpdated)
+	--    Gunakan getgenv() agar tidak double-connect saat re-run script
+	-- =========================================================================
+	do
+		local g = (getgenv and getgenv()) or _G
+		if g.__pnpV3CdConn then
+			pcall(function() g.__pnpV3CdConn:Disconnect() end)
+		end
+		g.__pnpV3CdConn = PetCooldownsUpdated.OnClientEvent:Connect(function(uuid, cdTable)
+			if type(uuid) ~= "string" then return end
+			local minCd, hasValid = computeCdFromTable(uuid, cdTable)
+			if minCd ~= nil then
+				cdLive[uuid] = minCd
+			end
+		end)
+	end
+
+	-- =========================================================================
+	-- 7. POSISI PLACE: pakai PetArea atau HumanoidRootPart sebagai fallback
+	-- =========================================================================
+	local GetFarm = require(RS.Modules.GetFarm)
+	local function placePos()
+		local farm = GetFarm and GetFarm(LP)
+		local pa   = farm and farm:FindFirstChild("PetArea")
+		if pa then return pa.Position end
+		local char = LP.Character
+		local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+		return hrp and hrp.Position or nil
+	end
+
+	-- =========================================================================
+	-- 8. TARGET PETS: daftar UUID yang boleh di-PnP siklus ini
+	--    Jika CFG.pnpUuids DIISI -> hanya proses UUID itu.
+	--    Jika KOSONG -> ambil semua equipped, exclude pet yang sedang dipakai Flow.
+	-- =========================================================================
+	local function getTargetPets()
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return {} end
+
+		local equippedList = d.PetsData and d.PetsData.EquippedPets or {}
+		local inv          = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+
+		local selFilter = CFG.pnpUuids or {}
+		local hasFilter = next(selFilter) ~= nil
+
+		-- Kumpulkan set UUID yang dipakai Flow (hanya berlaku jika filter KOSONG)
+		local flowSet = {}
+		if not hasFilter then
+			-- Growth active pets (leveling & elephant target)
+			for uuid in pairs(ctx.state.growthActivePets or {}) do flowSet[uuid] = true end
+			-- Growth team konfigurasi (elephant team, leveling team)
+			for uuid in pairs(CFG.growthElephantTeam or {})   do flowSet[uuid] = true end
+			for uuid in pairs(CFG.growthLevP1Team    or {})   do flowSet[uuid] = true end
+			for uuid in pairs(CFG.growthLevP2Team    or {})   do flowSet[uuid] = true end
+			-- Leveling V1/V2 team
+			for uuid in pairs(CFG.levelingTeamUuids  or {})   do flowSet[uuid] = true end
+			for uuid in pairs(CFG.levelingV2P1Team   or {})   do flowSet[uuid] = true end
+			for uuid in pairs(CFG.levelingV2P2Team   or {})   do flowSet[uuid] = true end
+		end
+
+		local out = {}
+		for _, uuid in ipairs(equippedList) do
+			local inFilter = hasFilter and selFilter[uuid]
+			local inFlow   = (not hasFilter) and flowSet[uuid]
+			if (hasFilter and inFilter) or (not hasFilter and not inFlow) then
+				local petType = inv[uuid] and inv[uuid].PetType
+				out[#out + 1] = { uuid = uuid, petType = petType }
+			end
+		end
+		return out
+	end
+
+	-- =========================================================================
+	-- 9. DROPDOWN INVENTORY (shared, sama seperti V1/V2 — dipakai oleh UI)
+	-- =========================================================================
+	function ctx.inventoryPetOptions(selectedSet)
+		local out = {}
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return out end
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not inv then return out end
+		local eq    = d.PetsData.EquippedPets or {}
+		local eqSet = {}
+		for _, u in ipairs(eq) do eqSet[u] = true end
+
+		for uuid, v in pairs(inv) do
+			local pt  = v.PetType  or "?"
+			local pd  = v.PetData  or {}
+			local age = pd.Level   or 0
+			local mut = pd.MutationType
+			local mutName = mut
+			if mut and ctx.reg and ctx.reg.mutDisplay then
+				mutName = ctx.reg.mutDisplay(mut)
+			end
+			local mutPrefix = (mut and mut ~= "" and mut ~= "Normal")
+				and (tostring(mutName) .. " ") or ""
+			local weight = (pd.BaseWeight or 0) * (1 + 0.1 * age)
+			local tag    = eqSet[uuid] and " [aktif]" or ""
+			out[#out + 1] = {
+				value   = uuid,
+				display = ("%s%s | %.2f KG | Age %s | #%s%s"):format(
+					mutPrefix, pt, weight, tostring(age), uuid:sub(2, 5), tag),
+			}
+		end
+
+		-- Validasi dan hapus UUID yang tidak ada di inventory
+		if selectedSet and next(inv) then
+			local changed = false
+			for u in pairs(selectedSet) do
+				if not inv[u] then selectedSet[u] = nil; changed = true end
+			end
+			if changed and ctx.persistState then ctx.persistState() end
+		end
+
+		table.sort(out, function(a, b)
+			local selA = selectedSet and selectedSet[a.value] and 1 or 0
+			local selB = selectedSet and selectedSet[b.value] and 1 or 0
+			if selA ~= selB then return selA > selB end
+			return a.display < b.display
+		end)
+		return out
+	end
+
+	-- =========================================================================
+	-- 10. STATUS STRING untuk UI
+	-- =========================================================================
+	function ctx.getPnpV3Status()
+		return ctx.state.pnpV3StatusStr or "PNP V3: idle"
+	end
+
+	-- =========================================================================
+	-- 11. CLEANUP: hapus entry state untuk pet yang tidak ada di inventory
+	--     Dijalankan tiap CLEANUP_INTERVAL detik
+	-- =========================================================================
+	local function cleanupStaleState()
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return end
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data or {}
+
+		-- Hapus knownActive untuk UUID yang tidak ada di inventory
+		for key in pairs(knownActive) do
+			local uuid = key:match("^([^:]+):")
+			if uuid and not inv[uuid] then
+				knownActive[key] = nil
+				dbg("Cleanup knownActive: " .. key)
+			end
+		end
+
+		-- Hapus petState untuk UUID yang tidak ada di inventory
+		for uuid in pairs(petState) do
+			if not inv[uuid] then
+				petState[uuid] = nil
+				cdLive[uuid]   = nil
+				lastPlace[uuid] = nil
+				dbg("Cleanup petState: " .. uuid)
+			end
+		end
+	end
+
+	-- =========================================================================
+	-- 12. PRIORITY QUEUE: urutkan pet berdasarkan cooldown (paling dekat ready duluan)
+	--     Pastikan hanya cast max pnpMaxPerCycle per siklus
+	-- =========================================================================
+	local function buildPriorityQueue(targets)
+		local queue = {}
+		for _, pet in ipairs(targets) do
+			local uuid = pet.uuid
+			local cd   = cdLive[uuid]
+			local st   = petState[uuid]
+
+			-- Seed cooldown jika belum ada data sama sekali
+			if cd == nil then
+				seedCooldown(uuid)
+				cd = cdLive[uuid]
+			end
+
+			-- Init petState jika belum ada
+			if not st then
+				petState[uuid] = {
+					uuid             = uuid,
+					lastQuery        = 0,
+					lastAction       = 0,
+					cooldown         = cd,
+					status           = "idle",
+					suspectUntil     = 0,
+					retryCount       = 0,
+					retryWindowStart = 0,
+				}
+				st = petState[uuid]
+			else
+				st.cooldown = cd
+			end
+
+			-- Hanya masukkan pet yang punya cooldown valid
+			if cd ~= nil then
+				queue[#queue + 1] = { uuid = uuid, cd = cd, state = st }
+			end
+		end
+
+		-- Sort: cd kecil (paling dekat 0) duluan
+		table.sort(queue, function(a, b) return a.cd < b.cd end)
+		return queue
+	end
+
+	-- =========================================================================
+	-- 13. CASTER: eksekusi unequip -> equip untuk satu pet
+	--     Return true jika berhasil dijalankan, false jika di-skip
+	-- =========================================================================
+	local function castPet(uuid, myId)
+		local now    = os.clock()
+		local st     = petState[uuid]
+		local cd     = cdLive[uuid]
+		local pos    = placePos()
+
+		-- Guard: pos harus valid
+		if not pos then
+			dbg("Skip " .. uuid .. " (no placePos)")
+			stats.totalSkipped = stats.totalSkipped + 1
+			return false
+		end
+
+		-- Guard: cooldown harus ready (<= 0)
+		if cd == nil or cd > 0 then
+			dbg("Skip " .. uuid .. " (cd=" .. tostring(cd) .. ")")
+			return false
+		end
+
+		-- Guard: knownActive — harus ada minimal 1 skill valid yg pernah on CD
+		-- Ini mencegah pet tanpa skill (semua passive permanen t=0) ter-trigger
+		local hasKnownSkill = false
+		for key in pairs(knownActive) do
+			if key:sub(1, #uuid + 1) == uuid .. ":" then
+				hasKnownSkill = true
+				break
+			end
+		end
+		if not hasKnownSkill then
+			dbg("Skip " .. uuid .. " (no knownActive skill)")
+			stats.totalSkipped = stats.totalSkipped + 1
+			return false
+		end
+
+		-- Guard: debounce global (juga nangkap equip dari Flow via pnpLastPlace)
+		local debounce = tonumber(CFG.pnpDebounce) or DEFAULT_DEBOUNCE
+		local timeSincePlace = now - (lastPlace[uuid] or 0)
+		if timeSincePlace < debounce then
+			dbg("Skip " .. uuid .. " (debounce " .. string.format("%.3f", timeSincePlace) .. "s < " .. debounce .. "s)")
+			stats.totalSkipped = stats.totalSkipped + 1
+			return false
+		end
+
+		-- Guard: suspect window (pet yang skillnya tidak keluar dalam timeout)
+		if st.suspectUntil and now < st.suspectUntil then
+			dbg("Skip " .. uuid .. " (suspect until " .. string.format("%.1f", st.suspectUntil - now) .. "s)")
+			stats.totalSkipped = stats.totalSkipped + 1
+			return false
+		end
+
+		-- Guard: retry limit (max MAX_RETRY_PER_WINDOW per RETRY_WINDOW detik)
+		if st.retryWindowStart and (now - st.retryWindowStart) < RETRY_WINDOW then
+			if (st.retryCount or 0) >= MAX_RETRY_PER_WINDOW then
+				dbg("Skip " .. uuid .. " (retry limit " .. MAX_RETRY_PER_WINDOW .. "/" .. RETRY_WINDOW .. "s)")
+				stats.totalSkipped = stats.totalSkipped + 1
+				return false
+			end
+		else
+			-- Reset jendela retry
+			st.retryCount       = 0
+			st.retryWindowStart = now
+		end
+
+		-- Guard: pnpV3Id masih valid
+		if not (CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV3Id == myId) then
+			return false
+		end
+
+		-- ---- EKSEKUSI CAST ----
+		dbg("Cast " .. uuid .. " (cd=" .. tostring(cd) .. ", debounce ok=" .. string.format("%.3f", timeSincePlace) .. "s)")
+
+		-- Jeda pickupDelay sebelum unequip (agar skill sempat register di server)
+		local pickupDelay = tonumber(CFG.pickupDelay) or DEFAULT_PICKUP_DELAY
+		if pickupDelay > 0 then task.wait(pickupDelay) end
+
+		-- Cek lagi setelah wait
+		if not (CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return false end
+
+		-- Simpan cd lama untuk deteksi skill gagal
+		local cdBeforeCast = cdLive[uuid]
+
+		pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+
+		local equipDelay = tonumber(CFG.equipDelay) or DEFAULT_EQUIP_DELAY
+		task.wait(math.max(0.01, equipDelay))
+
+		if not (CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV3Id == myId) then return false end
+
+		pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
+
+		-- Update state setelah cast berhasil
+		local castTime    = os.clock()
+		lastPlace[uuid]   = castTime
+		st.lastAction     = castTime
+		st.status         = "casting"
+		st.retryCount     = (st.retryCount or 0) + 1
+		stats.totalCasts  = stats.totalCasts + 1
+
+		-- Deteksi skill gagal: jadwalkan cek setelah DEFAULT_SCAN_TIMEOUT
+		-- (cek di siklus berikutnya via petState, bukan task.spawn baru)
+		st._cdBeforeCast  = cdBeforeCast
+		st._castAt        = castTime
+		st._scanTimeout   = tonumber(CFG.pnpScanTimeout) or DEFAULT_SCAN_TIMEOUT
+
+		return true
+	end
+
+	-- =========================================================================
+	-- 14. DETEKSI SKILL GAGAL
+	--     Dipanggil di awal setiap siklus untuk tiap pet yang statusnya "casting"
+	-- =========================================================================
+	local function checkSkillFail(uuid)
+		local st = petState[uuid]
+		if not st or st.status ~= "casting" then return end
+		local now      = os.clock()
+		local timeout  = st._scanTimeout or DEFAULT_SCAN_TIMEOUT
+		if (now - (st._castAt or 0)) < timeout then return end
+
+		-- Sudah melewati timeout: cek apakah cd berubah
+		local cdNow    = cdLive[uuid]
+		local cdBefore = st._cdBeforeCast
+
+		-- Jika cd SAMA dengan sebelum cast (tidak berubah sama sekali), skill gagal
+		if cdNow ~= nil and cdBefore ~= nil and cdNow == cdBefore and cdNow <= 0 then
+			stats.totalFailed = stats.totalFailed + 1
+			st.suspectUntil   = now + SUSPECT_WINDOW
+			st.status         = "idle"
+			dbg("WARN skill gagal uuid=" .. uuid .. " (cd tidak berubah dalam " .. timeout .. "s), suspect " .. SUSPECT_WINDOW .. "s")
+		else
+			-- Skill keluar normal, reset status
+			st.status = "idle"
+		end
+	end
+
+	-- =========================================================================
+	-- 15. MAIN LOOP — SATU LOOP, state machine, tidak spawn thread per-pet
+	-- =========================================================================
+	local function pnpV3Loop()
+		ctx.state.pnpV3Id = (ctx.state.pnpV3Id or 0) + 1
+		local myId        = ctx.state.pnpV3Id
+		ctx.elevate()
+
+		local lastCleanup = os.clock()
+		local cycleBudget = tonumber(CFG.pnpMaxPerCycle) or DEFAULT_MAX_PER_CYCLE
+
+		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV3Id == myId do
+			local now      = os.clock()
+			local interval = math.max(0.02, tonumber(CFG.pnpScanInterval) or DEFAULT_SCAN_INTERVAL)
+
+			-- Cleanup berkala (tiap CLEANUP_INTERVAL detik)
+			if (now - lastCleanup) >= CLEANUP_INTERVAL then
+				pcall(cleanupStaleState)
+				lastCleanup = now
+			end
+
+			-- Ambil daftar pet target siklus ini
+			local targets = getTargetPets()
+
+			if #targets == 0 then
+				ctx.state.pnpV3StatusStr = "PNP V3: tidak ada pet target (equip dulu / cek flow exclusion)"
+				ctx.setStatus(ctx.state.pnpV3StatusStr)
+			else
+				-- Cek skill gagal dari siklus sebelumnya (semua pet yang casting)
+				for _, pet in ipairs(targets) do
+					checkSkillFail(pet.uuid)
+				end
+
+				-- Bangun priority queue berdasarkan cooldown terdekat ready
+				local queue = buildPriorityQueue(targets)
+
+				-- Hitung berapa yang ready (cd <= 0 dan knownActive)
+				local readyCount   = 0
+				local waitingCount = 0
+				for _, item in ipairs(queue) do
+					if item.cd <= 0 then readyCount   = readyCount   + 1
+					else                 waitingCount = waitingCount + 1 end
+				end
+
+				-- Status string untuk UI
+				ctx.state.pnpV3StatusStr = ("PNP V3: %d pet | %d ready | %d waiting | cast:%d fail:%d"):format(
+					#targets, readyCount, waitingCount,
+					stats.totalCasts, stats.totalFailed)
+				ctx.setStatus(ctx.state.pnpV3StatusStr)
+
+				-- Cast: ambil MAX pnpMaxPerCycle pet yang cd <= 0 dari queue
+				local castCount = 0
+				cycleBudget     = tonumber(CFG.pnpMaxPerCycle) or DEFAULT_MAX_PER_CYCLE
+				for _, item in ipairs(queue) do
+					if castCount >= cycleBudget then break end
+					if item.cd <= 0 then
+						-- Pastikan loop masih hidup sebelum setiap cast
+						if not (CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV3Id == myId) then break end
+						local ok = castPet(item.uuid, myId)
+						if ok then
+							castCount = castCount + 1
+							-- Jeda antar-cast untuk hindari spam FireServer beruntun
+							if castCount < cycleBudget then
+								task.wait(0.1)
+							end
+						end
+					end
+				end
+			end
+
+			-- Jeda siklus utama (maks 0.1s sesuai spec CONSTRAINT #1)
+			task.wait(interval)
+		end
+
+		ctx.state.pnpV3StatusStr = "PNP V3: stopped"
+		ctx.setStatus(ctx.state.pnpV3StatusStr)
+	end
+
+	-- =========================================================================
+	-- 16. PUBLIC API
+	-- =========================================================================
+	function ctx.startPnpV3()
+		task.spawn(pnpV3Loop)
+	end
+
+	function ctx.stopPnpV3()
+		-- Bump ID -> loop lama mati di guard berikutnya
+		ctx.state.pnpV3Id = (ctx.state.pnpV3Id or 0) + 1
+	end
+
+	-- =========================================================================
+	-- 17. EXPOSE SHARED STATE untuk growth.lua patch
+	--     growth.lua baca ctx.state.pnpUuids -> tahu pet mana yang di-manage PnP
+	--     growth.lua set ctx.state.pnpLastPlace[uuid] setiap kali EquipPet dipanggil
+	-- =========================================================================
+	-- ctx.state.pnpLastPlace sudah diinit di atas, tinggal di-set oleh growth.lua patch.
+	-- ctx.state.pnpUuids = reference langsung ke CFG.pnpUuids (auto-sync)
+	ctx.state.pnpUuids = CFG.pnpUuids
+
 end
 ]=],
 	["modules/shop/automation_merchant.lua"] = [=[

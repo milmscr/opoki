@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 45 modul, di-generate 2026-11-14T03:34:51.572Z
+-- 45 modul, di-generate 2026-11-14T04:00:47.128Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua Ã¢â‚¬â€ init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -11027,23 +11027,22 @@ return function(ctx)
 	local function computeCdFromTable(uuid, cdTable)
 		if type(cdTable) ~= "table" or #cdTable == 0 then return nil, false end
 
-		local minCd     = nil  -- cooldown terkecil di antara skill valid non-mutation
+		local minCd     = nil
 		local hasValid  = false
+		local anySkill  = false  -- Flag baru
 
 		for _, entry in ipairs(cdTable) do
 			local passiveName = tostring(entry.Passive or "")
 			local t           = tonumber(entry.Time) or 0
 
-			-- Skip passive Mutation (tidak dihitung untuk PnP)
 			if not passiveName:find("Mutation") then
+				anySkill = true
 				local key = uuid .. ":" .. passiveName
 
-				-- Update knownActive: catat kalau pernah t > 0
 				if t > 0 then
 					knownActive[key] = true
 				end
 
-				-- Skill dianggap VALID hanya jika pernah on cooldown (knownActive)
 				if knownActive[key] then
 					hasValid = true
 					if minCd == nil or t < minCd then
@@ -11051,6 +11050,11 @@ return function(ctx)
 					end
 				end
 			end
+		end
+
+		-- FIX: Jika belum ada skill aktif yang dikenal, paksa return 0 agar bisa cast pertama kali
+		if not hasValid and anySkill then
+			return 0, true
 		end
 
 		return minCd, hasValid
@@ -11251,6 +11255,7 @@ return function(ctx)
 			-- Seed cooldown jika belum ada data sama sekali (non-blocking async)
 			if cd == nil then
 				seedCooldownAsync(uuid)
+				cd = 0 -- Tambahan: anggap ready dulu agar tidak stuck menunggu API
 			end
 
 			-- Init petState jika belum ada
@@ -11301,21 +11306,6 @@ return function(ctx)
 		-- Guard: cooldown harus ready (<= 0)
 		if cd == nil or cd > 0 then
 			dbg("Skip " .. uuid .. " (cd=" .. tostring(cd) .. ")")
-			return false
-		end
-
-		-- Guard: knownActive — harus ada minimal 1 skill valid yg pernah on CD
-		-- Ini mencegah pet tanpa skill (semua passive permanen t=0) ter-trigger
-		local hasKnownSkill = false
-		for key in pairs(knownActive) do
-			if key:sub(1, #uuid + 1) == uuid .. ":" then
-				hasKnownSkill = true
-				break
-			end
-		end
-		if not hasKnownSkill then
-			dbg("Skip " .. uuid .. " (no knownActive skill)")
-			stats.totalSkipped = stats.totalSkipped + 1
 			return false
 		end
 

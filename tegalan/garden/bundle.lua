@@ -1,6 +1,6 @@
 -- AUTO-GENERATED oleh tools/bundle.js — JANGAN edit manual.
 -- Edit modul-nya langsung, terus run `node tools/bundle.js`.
--- 44 modul, di-generate 2026-11-14T04:35:30.848Z
+-- 44 modul, di-generate 2026-11-14T07:40:56.288Z
 return {
 	["app.lua"] = [=[
 --[[ app.lua Ã¢â‚¬â€ init akhir garden: default tab Inventory + auto-resume automation. ]]
@@ -158,22 +158,13 @@ return function(ctx)
 		ctx.log("Auto-resume: Auto Reconnect ON.")
 	end
 
-	-- auto-resume PNP kalau sebelumnya aktif (V3 agresif / V2 event-driven / V1 polling, prioritas V3 -> V2 -> V1)
-	if CFG.pnpV3Enabled and ctx.startPnpV3 then
-		CFG.pnpEnabled = false
-		CFG.pnpV2Enabled = false
-		task.wait(1)
-		ctx.startPnpV3()
-		ctx.log("Auto-resume: PNP V3 ON.")
-	elseif CFG.pnpV2Enabled and ctx.startPnpV2 then
-		CFG.pnpEnabled = false
-		task.wait(1)
-		ctx.startPnpV2()
-		ctx.log("Auto-resume: PNP V2 ON.")
-	elseif CFG.pnpEnabled and ctx.startPnpV1 then
-		task.wait(1)
+	-- auto-resume PNP kalau sebelumnya aktif (V1 polling / V2 event-driven, mutually exclusive)
+	if CFG.pnpEnabled and ctx.startPnpV1 then
 		ctx.startPnpV1()
 		ctx.log("Auto-resume: PNP V1 ON.")
+	elseif CFG.pnpV2Enabled and ctx.startPnpV2 then
+		ctx.startPnpV2()
+		ctx.log("Auto-resume: PNP V2 ON.")
 	end
 
 	-- auto-resume kalau sebelumnya aktif
@@ -10594,11 +10585,12 @@ return function(ctx)
 end
 ]=],
 	["modules/pet/automation_pickup_pet_v1.lua"] = [=[
---[[ automation_pickup_pet_v1.lua — PnP V1 (POLLING).
-     Tiap pet target punya thread sendiri: query GetPetCooldown -> kalau ready pickup-place.
-     Langsung & simpel, tapi kena JITTER latency server (round-trip tiap cek).
-     Config SENDIRI: pnpUuids, pickupDelay, equipDelay, pnpScanInterval, pnpEnabled.
-     Fungsi: ctx.startPnpV1 / ctx.stopPnpV1. Juga expose ctx.inventoryPetOptions (dipakai V1 & V2). ]]
+--[[ automation_pickup_pet_v1.lua — PnP V1 (RAW FAST LOOP).
+     Tiap pet target punya thread sendiri: unequip -> equip secara cepat berbasis interval,
+     TANPA query GetPetCooldown (nol latency/round-trip).
+     Koordinat equip: CFrame.new(-16, 4, -104.99997711181641, 1, 0, 0, 0, 1, 0, 0, 0, 1).
+     Config: pnpUuids, pickupDelay, equipDelay, pnpScanInterval, pnpEnabled.
+     Fungsi: ctx.startPnpV1 / ctx.stopPnpV1. Expose ctx.inventoryPetOptions (dipakai V1 & V2). ]]
 return function(ctx)
 	local DataService = ctx.deps.DataService
 	local PetsService = ctx.deps.PetsService
@@ -10608,26 +10600,18 @@ return function(ctx)
 	local RS = game:GetService("ReplicatedStorage")
 	local LP = ctx.LP
 
-	local cdMap = ctx.state.cdMap or {}
-	ctx.state.cdMap = cdMap
-	local READY_TH = 0
+	-- Koordinat default equip sesuai permintaan
+	local TARGET_CFRAME = CFrame.new(-16, 4, -104.99997711181641, 1, 0, 0, 0, 1, 0, 0, 0, 1)
 
-	local GetPetCooldown = RS:WaitForChild("GameEvents"):WaitForChild("GetPetCooldown")
-
-	local function readMainCd(uuid)
-		local ok, cd = pcall(function() return GetPetCooldown:InvokeServer(uuid) end)
-		if not ok or type(cd) ~= "table" then return nil end
-		local data, minCd = {}, nil
-		for _, e in ipairs(cd) do
-			local t = tonumber(e.Time) or 0
-			data[#data + 1] = { Passive = e.Passive, Time = t }
-			if not tostring(e.Passive or ""):find("Mutation") then
-				-- Jika pet punya 2+ skill, ambil cooldown terkecil agar begitu salah satu ready (<= 0) langsung trigger PNP
-				if minCd == nil or t < minCd then minCd = t end
-			end
-		end
-		cdMap[uuid] = { data = data }
-		return minCd
+	local GetFarm = require(RS.Modules.GetFarm)
+	local function placeCFrame()
+		if TARGET_CFRAME then return TARGET_CFRAME end
+		local farm = GetFarm and GetFarm(LP)
+		local pa = farm and farm:FindFirstChild("PetArea")
+		if pa then return pa.CFrame or CFrame.new(pa.Position) end
+		local char = LP.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		return hrp and hrp.CFrame or CFrame.new(0, 0, 0)
 	end
 
 	local function targetPets()
@@ -10645,6 +10629,19 @@ return function(ctx)
 			end
 		end
 		return out
+	end
+
+	-- Cek apakah pet masih valid ada di inventory & masih ditargetkan
+	local function isPetValid(uuid)
+		local ok, d = pcall(function() return DataService:GetData() end)
+		if not ok or not d then return true end
+		local inv = d.PetsData and d.PetsData.PetInventory and d.PetsData.PetInventory.Data
+		if not inv or not inv[uuid] then return false end
+		local sel = CFG.pnpUuids or {}
+		if next(sel) then
+			return sel[uuid] == true
+		end
+		return true
 	end
 
 	-- daftar pet dari INVENTORY buat dropdown Select Pets (SHARED: dipakai V1 & V2).
@@ -10689,39 +10686,30 @@ return function(ctx)
 		return out
 	end
 
-	local GetFarm = require(RS.Modules.GetFarm)
-	local function placePos()
-		local farm = GetFarm and GetFarm(LP)
-		local pa = farm and farm:FindFirstChild("PetArea")
-		if pa then return pa.Position end
-		local char = LP.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		return hrp and hrp.Position or nil
-	end
-
-	----------------------------------------------------------------- loop (polling, paralel per-pet)
+	----------------------------------------------------------------- loop (raw interval cepat, paralel per-pet)
 	local petThreads = {}
-	local lastPlace = {}
 	local function runPetThread(uuid, myId)
 		petThreads[uuid] = true
 		while CFG.pnpEnabled and ctx.alive() and ctx.state.pnpV1Id == myId do
-			local stillTarget = false
-			for _, p in ipairs(targetPets()) do
-				if p.uuid == uuid then stillTarget = true; break end
-			end
-			if not stillTarget then break end
+			if not isPetValid(uuid) then break end
 
-			local mainCd = readMainCd(uuid)
-			local pos = placePos()
-			if pos and mainCd ~= nil and mainCd <= READY_TH and (os.clock() - (lastPlace[uuid] or 0)) > 0.25 then
-				if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
-				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-				pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
-				task.wait(math.max(0.01, CFG.equipDelay or 0.03))
-				if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
-				pcall(function() PetsService:FireServer("EquipPet", uuid, CFrame.new(pos)) end)
-				lastPlace[uuid] = os.clock()
+			if (CFG.pickupDelay or 0) > 0 then task.wait(CFG.pickupDelay) end
+			if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+
+			pcall(function() PetsService:FireServer("UnequipPet", uuid) end)
+
+			local eqDelay = CFG.equipDelay
+			if eqDelay and eqDelay == 1e-20 then
+				task.wait()
+			elseif eqDelay and eqDelay > 0 then
+				task.wait(eqDelay)
+			else
+				task.wait(0.03)
 			end
+			if not (CFG.pnpEnabled and ctx.state.pnpV1Id == myId) then break end
+
+			pcall(function() PetsService:FireServer("EquipPet", uuid, placeCFrame()) end)
+
 			task.wait(math.max(0.01, tonumber(CFG.pnpScanInterval) or 0.05))
 		end
 		petThreads[uuid] = nil
@@ -10739,14 +10727,14 @@ return function(ctx)
 				for _, p in ipairs(pets) do
 					if not petThreads[p.uuid] then task.spawn(runPetThread, p.uuid, myId) end
 				end
-				setStatus(("PNP V1 (polling): %d pet"):format(#pets))
+				setStatus(("PNP V1 (fast raw loop): %d pet"):format(#pets))
 			end
 			task.wait(1)
 		end
 	end
 
 	function ctx.startPnpV1() task.spawn(pnpLoop) end
-	function ctx.stopPnpV1() ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1 end -- bump id -> loop lama mati
+	function ctx.stopPnpV1() ctx.state.pnpV1Id = (ctx.state.pnpV1Id or 0) + 1 end
 end
 ]=],
 	["modules/pet/automation_pickup_pet_v2.lua"] = [=[
@@ -14889,18 +14877,16 @@ return function(ctx)
 
 	------------------------------------------------------------------ PET (PNP)
 	local pet = pageRef["Pet"]
-	local v1Render, v2Render, v3Render -- buat sync visual mutual-exclusion
+	local v1Render, v2Render -- buat sync visual mutual-exclusion
 
 	local petSub = makeSubTabs(pet, {
 		{ id = "v1",    name = "PnP V1" },
 		{ id = "v2",    name = "PnP V2" },
-		{ id = "v3",    name = "PnP V3" },
 		{ id = "boost", name = "Boost Pet" },
 	}, "v1", { hasBottomBar = false, hasInfoLine = false })
 
 	local pPetV1 = petSub.pages["v1"]
 	local pPetV2 = petSub.pages["v2"]
-	local pPetV3 = petSub.pages["v3"]
 	local pPetBoost = petSub.pages["boost"]
 
 	------------------------------------------------------------------ PnP V1 (polling)
@@ -14923,20 +14909,17 @@ return function(ctx)
 			end
 			persist()
 		end, 3)
-	makeInput(pnp, "Scan Interval (Seconds) [V1]", "Frekuensi cek cooldown (kecil = makin ketat, min 0.01)",
+	makeInput(pnp, "Scan Interval (Seconds) [V1]", "Interval jeda antar-siklus PnP (min 0.01s)",
 		function() return CFG.pnpScanInterval end,
 		function(txt) CFG.pnpScanInterval = math.max(0.01, tonumber(txt) or 0.05); persist() end, 4)
-	v1Render = makeToggle(pnp, "Enable Automation Pickup V1", "Polling GetPetCooldown (lama). Nyalain ini matiin V2 & V3.",
+	v1Render = makeToggle(pnp, "Enable Automation Pickup V1", "Fast Raw Loop (tanpa query cooldown, ultra cepat). Nyalain ini matiin V2.",
 		function() return CFG.pnpEnabled end,
 		function(v)
 			CFG.pnpEnabled = v; persist()
 			if v then
 				CFG.pnpV2Enabled = false; persist()
-				CFG.pnpV3Enabled = false; persist()
 				if ctx.stopPnpV2 then ctx.stopPnpV2() end
-				if ctx.stopPnpV3 then ctx.stopPnpV3() end
 				if type(v2Render) == 'function' then pcall(v2Render) elseif type(v2Render) == 'table' and type(v2Render.refresh) == 'function' then pcall(v2Render.refresh) end
-				if type(v3Render) == 'function' then pcall(v3Render) elseif type(v3Render) == 'table' and type(v3Render.refresh) == 'function' then pcall(v3Render.refresh) end
 				if ctx.startPnpV1 then ctx.startPnpV1() end
 			else
 				if ctx.stopPnpV1 then ctx.stopPnpV1() end
@@ -14956,127 +14939,19 @@ return function(ctx)
 	makeInput(pnp2, "Scan Interval (Seconds) [V2]", "Frekuensi cek cd dari cache event (min 0.02)",
 		function() return CFG.pnpV2ScanInterval end,
 		function(txt) CFG.pnpV2ScanInterval = math.max(0.02, tonumber(txt) or 0.05); persist() end, 4)
-	v2Render = makeToggle(pnp2, "Enable Automation Pickup V2", "Event-driven (PetCooldownsUpdated), stabil. Nyalain ini matiin V1 & V3.",
+	v2Render = makeToggle(pnp2, "Enable Automation Pickup V2", "Event-driven (PetCooldownsUpdated), stabil. Nyalain ini matiin V1.",
 		function() return CFG.pnpV2Enabled end,
 		function(v)
 			CFG.pnpV2Enabled = v; persist()
 			if v then
 				CFG.pnpEnabled = false; persist()
-				CFG.pnpV3Enabled = false; persist()
 				if ctx.stopPnpV1 then ctx.stopPnpV1() end
-				if ctx.stopPnpV3 then ctx.stopPnpV3() end
 				if type(v1Render) == 'function' then pcall(v1Render) elseif type(v1Render) == 'table' and type(v1Render.refresh) == 'function' then pcall(v1Render.refresh) end
-				if type(v3Render) == 'function' then pcall(v3Render) elseif type(v3Render) == 'table' and type(v3Render.refresh) == 'function' then pcall(v3Render.refresh) end
 				if ctx.startPnpV2 then ctx.startPnpV2() end
 			else
 				if ctx.stopPnpV2 then ctx.stopPnpV2() end
 			end
 		end, 5)
-
-	------------------------------------------------------------------ PnP V3 (agresif, state-machine tunggal)
-	local pnp3 = makeAccordion(pPetV3, "Automation Pickup Pet V3", 1, true)
-
-	local statusLblV3 = mk("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
-		Text = "Status: Idle", Font = F.reg, TextSize = 13, TextColor3 = C.txt,
-		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, LineHeight = 1.35, RichText = true, LayoutOrder = 1
-	}, pnp3)
-
-	local statsLblV3 = mk("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
-		Text = "Cast: 0 | Fail: 0 | Skipped: 0", Font = F.reg, TextSize = 12, TextColor3 = C.sub,
-		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, LineHeight = 1.35, RichText = true, LayoutOrder = 2
-	}, pnp3)
-
-	mk("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = 3 }, pnp3)
-
-	v3Render = makeToggle(pnp3, "Enable Automation PnP V3", "PnP Agresif & Cepat (state machine tunggal). Nyalain ini matiin V1 & V2.",
-		function() return CFG.pnpV3Enabled end,
-		function(v)
-			CFG.pnpV3Enabled = v; persist()
-			if v then
-				CFG.pnpEnabled = false; persist()
-				CFG.pnpV2Enabled = false; persist()
-				if ctx.stopPnpV1 then ctx.stopPnpV1() end
-				if ctx.stopPnpV2 then ctx.stopPnpV2() end
-				if type(v1Render) == 'function' then pcall(v1Render) elseif type(v1Render) == 'table' and type(v1Render.refresh) == 'function' then pcall(v1Render.refresh) end
-				if type(v2Render) == 'function' then pcall(v2Render) elseif type(v2Render) == 'table' and type(v2Render.refresh) == 'function' then pcall(v2Render.refresh) end
-				if ctx.startPnpV3 then ctx.startPnpV3() end
-			else
-				if ctx.stopPnpV3 then ctx.stopPnpV3() end
-			end
-		end, 4)
-
-	makeToggle(pnp3, "Debug Mode", "Tampilkan log detail setiap cast/skip ke console Roblox",
-		function() return CFG.pnpDebug end,
-		function(v) CFG.pnpDebug = v; persist() end, 5)
-
-	makeMultiDropdownDyn(pnp3, "Select Pets for Pickup [V3]", "Pilih pet dari backpack (kosong = semua yg di garden, auto-exclude Flow)",
-		function() return ctx.inventoryPetOptions(CFG.pnpUuids) end, CFG.pnpUuids, function() persist() end, 6)
-
-	makeInput(pnp3, "Debounce (Seconds) [V3]", "Jeda minimum antar-PnP per pet (default 0.35, min 0.1, max 2.0)",
-		function() return CFG.pnpDebounce end,
-		function(txt)
-			local n = tonumber(txt) or 0.35
-			CFG.pnpDebounce = math.clamp(math.floor(n * 100 + 0.5) / 100, 0.1, 2.0)
-			persist()
-		end, 7)
-
-	makeInput(pnp3, "Max Cast Per Cycle [V3]", "Maksimal pet yang di-cast per siklus loop (default 8, min 1, max 20)",
-		function() return CFG.pnpMaxPerCycle end,
-		function(txt)
-			local n = tonumber(txt) or 8
-			CFG.pnpMaxPerCycle = math.clamp(math.floor(n), 1, 20)
-			persist()
-		end, 8)
-
-	makeInput(pnp3, "Scan Timeout (Seconds) [V3]", "Batas waktu deteksi skill gagal jika cooldown tidak berubah (default 6, min 2, max 15)",
-		function() return CFG.pnpScanTimeout end,
-		function(txt)
-			local n = tonumber(txt) or 6
-			CFG.pnpScanTimeout = math.clamp(math.floor(n), 2, 15)
-			persist()
-		end, 9)
-
-	makeInput(pnp3, "Pickup Delay (Seconds) [V3]", "Jeda tiap siklus sebelum unequip (default 0)",
-		function() return CFG.pickupDelay end,
-		function(txt) CFG.pickupDelay = math.max(0, tonumber(txt) or 0); persist() end, 10)
-
-	makeInput(pnp3, "Equip Delay (Seconds) [V3]", "Jeda antara unequip -> equip (default 0.03)",
-		function()
-			if CFG.equipDelay == 1e-20 or CFG.equipDelay == 0 or not CFG.equipDelay then return "1E-20" end
-			return tostring(CFG.equipDelay)
-		end,
-		function(txt)
-			if tostring(txt):upper():find("1E%-20") then
-				CFG.equipDelay = 1e-20
-			else
-				CFG.equipDelay = tonumber(txt) or 0.03
-			end
-			persist()
-		end, 11)
-
-	makeInput(pnp3, "Scan Interval (Seconds) [V3]", "Frekuensi cek loop PnP V3 (default 0.05, min 0.02)",
-		function() return CFG.pnpScanInterval end,
-		function(txt) CFG.pnpScanInterval = math.max(0.02, tonumber(txt) or 0.05); persist() end, 12)
-
-	task.spawn(function()
-		while ctx.alive() do
-			if onScreen and onScreen(pet) then
-				pcall(function()
-					if statusLblV3 and statusLblV3.Parent then
-						statusLblV3.Text = ctx.getPnpV3Status and ctx.getPnpV3Status() or "-"
-					end
-					if statsLblV3 and statsLblV3.Parent then
-						local s = ctx.state.pnpStats or {}
-						statsLblV3.Text = ("Cast: <font color=\"#5acc78\">%d</font> | Fail: <font color=\"#dc5050\">%d</font> | Skipped: <font color=\"#8c929e\">%d</font>"):format(
-							s.totalCasts or 0, s.totalFailed or 0, s.totalSkipped or 0)
-					end
-				end)
-			end
-			task.wait(0.5)
-		end
-	end)
 
 	-- Accordion: Automation Boost Pet
 	local boostAcc = makeAccordion(pPetBoost, "Automation Boost Pet", 1, true)
